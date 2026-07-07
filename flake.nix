@@ -37,5 +37,8 @@
       checks = eachSystem (pkgs: {
         formatting = treefmtEval.${pkgs.stdenv.hostPlatform.system}.config.build.check self;
       });
+
+      # nixbot scheduled effects
+      effects = import ./nix/effects.nix { pkgs = nixpkgs.legacyPackages.x86_64-linux; };
     };
 }

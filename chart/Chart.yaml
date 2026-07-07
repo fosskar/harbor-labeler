@@ -1,0 +1,9 @@
+apiVersion: v2
+name: harbor-labeler
+description: Labels running container images in a Harbor registry with a per-cluster label
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/fosskar/harbor-labeler
+sources:
+  - https://github.com/fosskar/harbor-labeler

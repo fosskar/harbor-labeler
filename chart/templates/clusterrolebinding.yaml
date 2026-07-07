@@ -1,0 +1,17 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ template "harbor-labeler.fullname" . }}
+  labels:
+    app: {{ template "harbor-labeler.name" . }}
+    {{- include "harbor-labeler.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ template "harbor-labeler.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "harbor-labeler.serviceAccountName" . }}
+    namespace: {{ template "harbor-labeler.namespace" . }}
+{{- end }}

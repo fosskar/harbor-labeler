@@ -1,0 +1,14 @@
+{{- if and .Values.harborLabeler.customCAs.enabled (gt (len .Values.harborLabeler.customCAs.certificates) 0) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "harbor-labeler.fullname" . }}-ca-certs
+  labels:
+    app: {{ include "harbor-labeler.name" . }}
+    {{- include "harbor-labeler.labels" . | nindent 4 }}
+data:
+  {{- range $filename, $content := .Values.harborLabeler.customCAs.certificates }}
+  {{ $filename }}: |
+{{ $content | indent 4 }}
+  {{- end }}
+{{- end }}

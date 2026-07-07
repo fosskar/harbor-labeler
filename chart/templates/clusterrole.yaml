@@ -1,0 +1,13 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ template "harbor-labeler.fullname" . }}
+  labels:
+    app: {{ template "harbor-labeler.name" . }}
+    {{- include "harbor-labeler.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

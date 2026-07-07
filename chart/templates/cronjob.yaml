@@ -1,0 +1,84 @@
+{{- if .Values.harborLabeler }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ template "harbor-labeler.fullname" . }}
+  labels:
+    app: {{ template "harbor-labeler.name" . }}
+    {{- include "harbor-labeler.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.harborLabeler.schedule | quote }}
+  concurrencyPolicy: "Forbid"
+  failedJobsHistoryLimit: {{ .Values.harborLabeler.failedJobsHistoryLimit }}
+  successfulJobsHistoryLimit: {{ .Values.harborLabeler.successfulJobsHistoryLimit }}
+  suspend: {{ .Values.suspend | default false }}
+  jobTemplate:
+    spec:
+      parallelism: 1
+      completions: {{ .Values.completions | default 1 }}
+      backoffLimit: {{ .Values.harborLabeler.backoffLimit | default 5 }}
+      ttlSecondsAfterFinished: {{ .Values.harborLabeler.podttl | default 3600 }}
+      template:
+        metadata:
+          labels:
+            app: {{ template "harbor-labeler.name" . }}
+            {{- include "harbor-labeler.labels" . | nindent 12 }}
+        spec:
+          serviceAccountName: {{ template "harbor-labeler.serviceAccountName" . }}
+          {{- if .Values.harborLabeler.image.imagePullSecrets }}
+          imagePullSecrets:
+            {{- range .Values.harborLabeler.image.imagePullSecrets }}
+            - name: {{ . }}
+            {{- end }}
+          {{- end }}
+          restartPolicy: {{ .Values.harborLabeler.restartPolicy | default "Never" }}
+          {{- if .Values.harborLabeler.podSecurityContext }}
+          securityContext:
+            {{- toYaml .Values.harborLabeler.podSecurityContext | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: {{ template "harbor-labeler.fullname" . }}-cronjob
+              image: {{ if .Values.harborLabeler.image.registry }}{{ .Values.harborLabeler.image.registry }}/{{ end }}{{ .Values.harborLabeler.image.repository }}:{{ .Values.harborLabeler.image.tag }}
+              imagePullPolicy: {{ .Values.harborLabeler.image.pullPolicy }}
+              {{- if .Values.harborLabeler.securityContext }}
+              securityContext:
+                {{- toYaml .Values.harborLabeler.securityContext | nindent 16 }}
+              {{- end }}
+              resources:
+                {{- toYaml .Values.harborLabeler.resources | nindent 16 }}
+              {{- if .Values.harborLabeler.customCAs.enabled }}
+              volumeMounts:
+                - name: custom-ca-certs
+                  mountPath: {{ .Values.harborLabeler.customCAs.mountPath }}
+                  readOnly: true
+              {{- end }}
+              env:
+                {{- range $key, $value := .Values.harborLabeler.env }}
+                - name: {{ $key }}
+                  value: {{ $value | quote }}
+                {{- end }}
+                {{- if .Values.harborLabeler.customCAs.enabled }}
+                # Go only reads files directly in SSL_CERT_DIR entries; the
+                # custom mount is a subdirectory, so list it explicitly.
+                - name: SSL_CERT_DIR
+                  value: {{ printf "/etc/ssl/certs:%s" .Values.harborLabeler.customCAs.mountPath | quote }}
+                {{- end }}
+                {{- if .Values.harborLabeler.envFrom }}
+              envFrom:
+                {{- toYaml .Values.harborLabeler.envFrom | nindent 16 }}
+                {{- end }}
+          {{- if .Values.harborLabeler.customCAs.enabled }}
+          volumes:
+            - name: custom-ca-certs
+              {{- if .Values.harborLabeler.customCAs.configMap }}
+              configMap:
+                name: {{ .Values.harborLabeler.customCAs.configMap }}
+              {{- else if .Values.harborLabeler.customCAs.secret }}
+              secret:
+                secretName: {{ .Values.harborLabeler.customCAs.secret }}
+              {{- else if gt (len .Values.harborLabeler.customCAs.certificates) 0 }}
+              configMap:
+                name: {{ include "harbor-labeler.fullname" . }}-ca-certs
+              {{- end }}
+          {{- end }}
+{{- end }}

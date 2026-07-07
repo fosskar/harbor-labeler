@@ -1,0 +1,89 @@
+# fullname and name override
+fullnameOverride: ""
+nameOverride: ""
+# Namespace configuration
+namespaceOverride: "" # Specify a custom namespace if different from the release namespace
+# Add common Labels
+commonLabels: {}
+# Configuration for harbor-labeler Job
+harborLabeler:
+  # Image settings
+  image:
+    registry: "" # e.g., docker.io or a private registry
+    repository: "localhost/harbor-labeler"
+    tag: latest
+    imagePullSecrets: []
+    pullPolicy: IfNotPresent
+  # Resources (optional, define limits and requests here)
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "128Mi"
+    requests:
+      cpu: "250m"
+      memory: "64Mi"
+  # Define container-level security context here, e.g., runAsNonRoot
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    privileged: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  # Security contexts
+  # Define pod-level security context heree.g., fsGroup, runAsUser
+  podSecurityContext:
+    runAsUser: 3000
+    runAsGroup: 3000
+    fsGroup: 3000
+    runAsNonRoot: true
+  schedule: "* * * * *"
+  parallelism: 1
+  failedJobsHistoryLimit: 10
+  successfulJobsHistoryLimit: 5
+  backoffLimit: 10
+  podttl: 3600
+  restartPolicy: "Never"
+  # Environment variables for the container.
+  # For HARBOR_PASSWORD prefer a Secret via envFrom below.
+  env:
+    HARBOR_URL: ""
+    HARBOR_USERNAME: ""
+    HARBOR_PASSWORD: ""
+    CLUSTER_NAME: ""
+  # Optional envFrom sources, e.g. a Secret holding HARBOR_PASSWORD:
+  # envFrom:
+  #   - secretRef:
+  #       name: harbor-labeler-credentials
+  envFrom: []
+  # Custom CA certificates for Harbor TLS verification
+  # Useful for self-signed certificates or internal CAs
+  customCAs:
+    enabled: false
+    # Option 1: Provide CA certificate content directly
+    certificates: {}
+    # harbor-ca.crt: |
+    #   -----BEGIN CERTIFICATE-----
+    #   YOUR_HARBOR_CA_CERTIFICATE_CONTENT_HERE
+    #   -----END CERTIFICATE-----
+    # internal-ca.crt: |
+    #   -----BEGIN CERTIFICATE-----
+    #   YOUR_INTERNAL_CA_CERTIFICATE_CONTENT_HERE
+    #   -----END CERTIFICATE-----
+
+    # Option 2: Reference existing ConfigMap or Secret
+    configMap: "" # Name of existing ConfigMap containing CA certificates
+    secret: "" # Name of existing Secret containing CA certificates
+    # Mount path for custom CA certificates
+    mountPath: "/etc/ssl/certs/custom"
+# Service Account configuration
+serviceAccount:
+  create: true # Set to true to create a dedicated service account for the Job
+  name: "" # Specify the service account name if different
+  annotations: {} # Custom annotations for the service account
+  automountServiceAccountToken: true # Whether the service account token should be automatically mounted
+# Enable RBAC resources (ClusterRole, Role, RoleBinding, ClusterRoleBinding)
+rbac:
+  create: true

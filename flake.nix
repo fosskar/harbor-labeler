@@ -19,7 +19,7 @@
       eachSystem =
         f: lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: f nixpkgs.legacyPackages.${system});
 
-      treefmtEval = eachSystem (pkgs: treefmt-nix.lib.evalModule pkgs ./treefmt.nix);
+      treefmtEval = eachSystem (pkgs: treefmt-nix.lib.evalModule pkgs ./nix/treefmt.nix);
     in
     {
       # Build executables. See https://nixos.org/manual/nixpkgs/stable/#sec-language-go
@@ -29,7 +29,7 @@
       });
 
       devShells = eachSystem (pkgs: {
-        default = pkgs.callPackage ./nix/shell.nix { };
+        default = pkgs.callPackage ./nix/devshell.nix { };
       });
 
       formatter = eachSystem (pkgs: treefmtEval.${pkgs.stdenv.hostPlatform.system}.config.build.wrapper);

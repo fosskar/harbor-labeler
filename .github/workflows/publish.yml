@@ -8,6 +8,9 @@ permissions:
 env:
   IMAGE: ghcr.io/${{ github.repository }}
   CHARTS: ghcr.io/${{ github.repository_owner }}/charts
+  # ubuntu runner ships a v1-format /etc/containers/registries.conf that
+  # nixpkgs skopeo rejects; point it at an empty (valid v2) config instead
+  CONTAINERS_REGISTRIES_CONF: /dev/null
 jobs:
   publish:
     runs-on: ubuntu-latest

@@ -1,0 +1,71 @@
+name: publish
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write # release job creates the git tag + github release
+  packages: write
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  CHARTS: ghcr.io/${{ github.repository_owner }}/charts
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      # CI (nix flake check, incl. formatting) is nixbot's job; publish stays
+      # gated on the image build, whose buildGoModule check phase runs the go
+      # test suite.
+      - name: build image
+        run: nix build .#image
+      # Release gate: a VERSION bump (image tag not yet in ghcr) makes this
+      # push a release; otherwise it only refreshes the :main snapshot.
+      - name: decide snapshot or release
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nix run nixpkgs#skopeo -- login ghcr.io \
+            --username "${{ github.actor }}" --password "$GITHUB_TOKEN"
+          version=$(nix eval --raw .#default.version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if nix run nixpkgs#skopeo -- inspect --no-tags "docker://$IMAGE:$version" > /dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: push snapshot image
+        if: steps.gate.outputs.release == 'false'
+        run: |
+          # streamLayeredImage: ./result emits a docker-archive tar stream
+          ./result | nix run nixpkgs#skopeo -- copy \
+            docker-archive:/dev/stdin "docker://$IMAGE:main"
+      - name: push release image
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          version=${{ steps.gate.outputs.version }}
+          ./result > image.tar
+          nix run nixpkgs#skopeo -- copy \
+            docker-archive:image.tar "docker://$IMAGE:$version"
+          nix run nixpkgs#skopeo -- copy \
+            docker-archive:image.tar "docker://$IMAGE:latest"
+      - name: push helm chart
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=${{ steps.gate.outputs.version }}
+          helm registry login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin <<< "$GITHUB_TOKEN"
+          helm package chart/ --version "$version" --app-version "$version"
+          helm push "harbor-labeler-$version.tgz" "oci://$CHARTS"
+      - name: tag and github release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=${{ steps.gate.outputs.version }}
+          git tag "v$version"
+          git push origin "v$version"
+          gh release create "v$version" --generate-notes

@@ -9,9 +9,10 @@ commonLabels: {}
 harborLabeler:
   # Image settings
   image:
-    registry: "" # e.g., docker.io or a private registry
-    repository: "localhost/harbor-labeler"
-    tag: latest
+    registry: "ghcr.io"
+    repository: "fosskar/harbor-labeler"
+    # Defaults to the chart's appVersion when empty.
+    tag: ""
     imagePullSecrets: []
     pullPolicy: IfNotPresent
   # Resources (optional, define limits and requests here)

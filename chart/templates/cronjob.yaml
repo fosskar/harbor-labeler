@@ -38,7 +38,7 @@ spec:
           {{- end }}
           containers:
             - name: {{ template "harbor-labeler.fullname" . }}-cronjob
-              image: {{ if .Values.harborLabeler.image.registry }}{{ .Values.harborLabeler.image.registry }}/{{ end }}{{ .Values.harborLabeler.image.repository }}:{{ .Values.harborLabeler.image.tag }}
+              image: {{ if .Values.harborLabeler.image.registry }}{{ .Values.harborLabeler.image.registry }}/{{ end }}{{ .Values.harborLabeler.image.repository }}:{{ .Values.harborLabeler.image.tag | default .Chart.AppVersion }}
               imagePullPolicy: {{ .Values.harborLabeler.image.pullPolicy }}
               {{- if .Values.harborLabeler.securityContext }}
               securityContext:

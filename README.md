@@ -57,9 +57,11 @@ Use a system-level robot account with:
 
 ## Deploy with Helm
 
+Image and chart are published to ghcr.io on every push to main (image tag
+`latest`) and on `v*` tags (image tag `<version>`).
+
 ```bash
-helm install harbor-labeler ./chart \
-  --set harborLabeler.image.registry=your-registry.example.com \
+helm install harbor-labeler oci://ghcr.io/fosskar/charts/harbor-labeler \
   --set harborLabeler.env.HARBOR_URL=https://harbor.example.com \
   --set harborLabeler.env.HARBOR_USERNAME=robot_labeler \
   --set harborLabeler.env.HARBOR_PASSWORD=... \
@@ -100,13 +102,12 @@ harborLabeler:
 
 ## Container image
 
-The OCI image is built with Nix:
+CI publishes `ghcr.io/fosskar/harbor-labeler`. To build and push manually:
 
 ```bash
 nix build .#image
 ./result | docker load        # streamLayeredImage emits a tar stream
-docker tag harbor-labeler:0.1.0 your-registry.example.com/tools/harbor-labeler:0.1.0
-docker push your-registry.example.com/tools/harbor-labeler:0.1.0
+docker push ghcr.io/fosskar/harbor-labeler:0.1.0
 ```
 
 ## Development

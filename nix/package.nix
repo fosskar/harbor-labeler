@@ -6,6 +6,8 @@
 
 buildGoModule {
   pname = "harbor-labeler";
+  # Single source of truth for the release version; CI reads it via
+  # `nix eval --raw .#default.version` and gates publishing on it.
   version = "0.1.0";
 
   inherit src;

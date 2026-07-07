@@ -36,6 +36,14 @@
 
       checks = eachSystem (pkgs: {
         formatting = treefmtEval.${pkgs.stdenv.hostPlatform.system}.config.build.check self;
+        # surface the package (buildGoModule check phase runs go tests) and
+        # image in `nix flake check` so nixbot builds them on every push
+        inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) default image;
+        chart = pkgs.runCommand "helm-lint" { nativeBuildInputs = [ pkgs.kubernetes-helm ]; } ''
+          helm lint ${self.outPath}/chart --strict
+          helm template test ${self.outPath}/chart > /dev/null
+          touch $out
+        '';
       });
 
       # nixbot scheduled effects

@@ -1,0 +1,31 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ template "harbor-labeler.fullname" . }}
+  labels:
+    app: {{ template "harbor-labeler.name" . }}
+    {{- include "harbor-labeler.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ template "harbor-labeler.name" . }}
+  policyTypes:
+    - Ingress
+    - Egress
+  # a cronjob serves nothing: deny all ingress
+  ingress: []
+  egress:
+    # dns
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # kubernetes api and harbor
+    - ports:
+        {{- range .Values.networkPolicy.egressPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+{{- end }}

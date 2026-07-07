@@ -46,6 +46,8 @@ harborLabeler:
   successfulJobsHistoryLimit: 5
   backoffLimit: 10
   podttl: 3600
+  # Kill runs that hang longer than this (seconds).
+  activeDeadlineSeconds: 900
   restartPolicy: "Never"
   # Environment variables for the container.
   # For HARBOR_PASSWORD prefer a Secret via envFrom below.
@@ -85,6 +87,14 @@ serviceAccount:
   name: "" # Specify the service account name if different
   annotations: {} # Custom annotations for the service account
   automountServiceAccountToken: true # Whether the service account token should be automatically mounted
-# Enable RBAC resources (ClusterRole, Role, RoleBinding, ClusterRoleBinding)
+# Enable RBAC resources (ClusterRole, ClusterRoleBinding)
 rbac:
   create: true
+# Deny all ingress; restrict egress to dns plus the listed TCP ports
+# (kubernetes api and harbor). Inert on clusters without a
+# networkpolicy-capable CNI.
+networkPolicy:
+  enabled: true
+  egressPorts:
+    - 443
+    - 6443

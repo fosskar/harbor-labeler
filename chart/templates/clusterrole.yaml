@@ -9,5 +9,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    # the labeler performs exactly one cluster-wide pod List per run
+    verbs: ["list"]
 {{- end }}

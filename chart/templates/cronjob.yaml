@@ -18,6 +18,8 @@ spec:
       completions: {{ .Values.completions | default 1 }}
       backoffLimit: {{ .Values.harborLabeler.backoffLimit | default 5 }}
       ttlSecondsAfterFinished: {{ .Values.harborLabeler.podttl | default 3600 }}
+      # kill hung runs; a stuck pod holds a live serviceaccount token
+      activeDeadlineSeconds: {{ .Values.harborLabeler.activeDeadlineSeconds | default 900 }}
       template:
         metadata:
           labels:
@@ -25,6 +27,8 @@ spec:
             {{- include "harbor-labeler.labels" . | nindent 12 }}
         spec:
           serviceAccountName: {{ template "harbor-labeler.serviceAccountName" . }}
+          # no cluster service env-var injection
+          enableServiceLinks: false
           {{- if .Values.harborLabeler.image.imagePullSecrets }}
           imagePullSecrets:
             {{- range .Values.harborLabeler.image.imagePullSecrets }}

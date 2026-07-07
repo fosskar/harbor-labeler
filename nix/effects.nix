@@ -18,9 +18,8 @@ let
           pkgs.jq
           pkgs.nix
         ];
-        # On a github repo the GitToken is already a github (app installation)
-        # token; the nixfiles "github-api" secret is only mapped for
-        # gitea:fosskar/* and would never resolve here.
+        # The GitToken is already a github (app installation) token, so the
+        # nixfiles "github-api" secret is not needed here.
         secretsMap = builtins.toJSON { git.type = "GitToken"; };
         HOME = "/build";
       }
@@ -49,7 +48,7 @@ _args: {
       minute = 0;
     };
     outputs.effects.update-flake-inputs = mkRepoEffect "update-flake-inputs" ''
-      nix run "git+https://codeberg.org/fosskar/nixfiles?shallow=1#updater-flake-inputs"
+      nix run "github:fosskar/nixfiles#updater-flake-inputs"
     '';
   };
 }

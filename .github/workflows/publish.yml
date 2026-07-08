@@ -24,8 +24,8 @@ jobs:
     # including failures and fork PRs from a branch named main — publish only
     # on a successful run for a push.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
+      github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' &&
+
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:

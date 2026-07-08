@@ -1,10 +1,33 @@
 name: e2e
 # Full end-to-end test against a real kind cluster with a real Harbor
-# deployed inside it. Heavy (~10 min), so it runs only on PRs and on demand —
-# unit tests stay with nixbot's `nix flake check`, and this cannot run there
+# deployed inside it. Heavy (~10 min), so it runs on PRs, on pushes to main
+# that touch code/chart/nix (docs-only pushes skip it), and on demand — unit
+# tests stay with nixbot's `nix flake check`, and this cannot run there
 # because the nix sandbox has no docker.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - chart/**
+      - e2e/**
+      - nix/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/e2e.yml
   pull_request:
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - chart/**
+      - e2e/**
+      - nix/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/e2e.yml
   workflow_dispatch:
 permissions:
   contents: read

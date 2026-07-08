@@ -23,10 +23,7 @@ jobs:
     # workflow_run fires for every completed e2e run on head branch main,
     # including failures and fork PRs from a branch named main — publish only
     # on a successful run for a push.
-    if: >-
-      github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' &&
-
-       github.event.workflow_run.conclusion == 'success')
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

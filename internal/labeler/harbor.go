@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -166,8 +167,29 @@ func (c *Client) EnsureGlobalLabel(ctx context.Context, name string) (int64, err
 	return id, nil
 }
 
-// ListProjects returns the names of all projects visible to the account.
-func (c *Client) ListProjects(ctx context.Context) ([]string, error) {
+// ListAllLabeledArtifacts returns every artifact across all projects that
+// currently carries the given label. A project whose listing fails is
+// skipped; partial results are returned together with the joined errors.
+func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error) {
+	projects, err := c.listProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing projects: %w", err)
+	}
+	var refs []ArtifactRef
+	var errs []error
+	for _, project := range projects {
+		labeled, err := c.listLabeledArtifacts(ctx, project, labelID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("listing labeled artifacts in %s: %w", project, err))
+			continue
+		}
+		refs = append(refs, labeled...)
+	}
+	return refs, errors.Join(errs...)
+}
+
+// listProjects returns the names of all projects visible to the account.
+func (c *Client) listProjects(ctx context.Context) ([]string, error) {
 	var names []string
 	for page := 1; ; page++ {
 		var projects []struct {
@@ -186,9 +208,9 @@ func (c *Client) ListProjects(ctx context.Context) ([]string, error) {
 	}
 }
 
-// ListLabeledArtifacts returns all artifacts in the project that currently
+// listLabeledArtifacts returns all artifacts in the project that currently
 // carry the given label.
-func (c *Client) ListLabeledArtifacts(ctx context.Context, project string, labelID int64) ([]ArtifactRef, error) {
+func (c *Client) listLabeledArtifacts(ctx context.Context, project string, labelID int64) ([]ArtifactRef, error) {
 	repos, err := c.listRepositories(ctx, project)
 	if err != nil {
 		return nil, err

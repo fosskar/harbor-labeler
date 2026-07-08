@@ -120,9 +120,9 @@ func TestListProjectsPaginates(t *testing.T) {
 		}
 	}))
 
-	projects, err := c.ListProjects(context.Background())
+	projects, err := c.listProjects(context.Background())
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("listProjects: %v", err)
 	}
 	if len(projects) != 101 {
 		t.Fatalf("got %d projects, want 101", len(projects))
@@ -132,11 +132,13 @@ func TestListProjectsPaginates(t *testing.T) {
 	}
 }
 
-func TestListLabeledArtifacts(t *testing.T) {
+func TestListAllLabeledArtifacts(t *testing.T) {
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		checkAuth(t, r)
 		switch r.URL.EscapedPath() {
+		case "/api/v2.0/projects":
+			writeJSON(w, []map[string]any{{"name": "team"}})
 		case "/api/v2.0/projects/team/repositories":
 			writeJSON(w, []map[string]any{
 				{"name": "team/sub/app"}, // Harbor returns project-prefixed repo names
@@ -153,13 +155,41 @@ func TestListLabeledArtifacts(t *testing.T) {
 		}
 	}))
 
-	artifacts, err := c.ListLabeledArtifacts(context.Background(), "team", 7)
+	artifacts, err := c.ListAllLabeledArtifacts(context.Background(), 7)
 	if err != nil {
-		t.Fatalf("ListLabeledArtifacts: %v", err)
+		t.Fatalf("ListAllLabeledArtifacts: %v", err)
 	}
 	want := []ArtifactRef{{Project: "team", Repository: "sub/app", Digest: digest}}
 	if len(artifacts) != 1 || artifacts[0] != want[0] {
 		t.Errorf("got %v, want %v", artifacts, want)
+	}
+}
+
+func TestListAllLabeledArtifactsPartialFailure(t *testing.T) {
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/api/v2.0/projects":
+			writeJSON(w, []map[string]any{{"name": "broken"}, {"name": "ok"}})
+		case "/api/v2.0/projects/broken/repositories":
+			w.WriteHeader(http.StatusForbidden)
+		case "/api/v2.0/projects/ok/repositories":
+			writeJSON(w, []map[string]any{{"name": "ok/app"}})
+		case "/api/v2.0/projects/ok/repositories/app/artifacts":
+			writeJSON(w, []map[string]any{{"digest": digest}})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.EscapedPath())
+			http.NotFound(w, r)
+		}
+	}))
+
+	artifacts, err := c.ListAllLabeledArtifacts(context.Background(), 7)
+	if err == nil {
+		t.Fatal("expected error for the broken project")
+	}
+	want := ArtifactRef{Project: "ok", Repository: "app", Digest: digest}
+	if len(artifacts) != 1 || artifacts[0] != want {
+		t.Errorf("got %v, want partial result %v", artifacts, want)
 	}
 }
 

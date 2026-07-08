@@ -10,9 +10,9 @@ import (
 )
 
 type fakeHarbor struct {
-	labelID  int64
-	projects []string
-	labeled  map[string][]ArtifactRef // project -> artifacts carrying the label
+	labelID int64
+	labeled []ArtifactRef // artifacts carrying the label, across all projects
+	listErr error         // returned by ListAllLabeledArtifacts alongside labeled
 
 	ensuredName string
 	added       []ArtifactRef
@@ -25,15 +25,11 @@ func (f *fakeHarbor) EnsureGlobalLabel(ctx context.Context, name string) (int64,
 	return f.labelID, nil
 }
 
-func (f *fakeHarbor) ListProjects(ctx context.Context) ([]string, error) {
-	return f.projects, nil
-}
-
-func (f *fakeHarbor) ListLabeledArtifacts(ctx context.Context, project string, labelID int64) ([]ArtifactRef, error) {
+func (f *fakeHarbor) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error) {
 	if labelID != f.labelID {
 		return nil, fmt.Errorf("unexpected label id %d", labelID)
 	}
-	return f.labeled[project], nil
+	return f.labeled, f.listErr
 }
 
 func (f *fakeHarbor) AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error {
@@ -87,9 +83,8 @@ func TestReconcileRemovesStaleOnly(t *testing.T) {
 	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
 	still := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
 	f := &fakeHarbor{
-		labelID:  7,
-		projects: []string{"backend", "empty"},
-		labeled:  map[string][]ArtifactRef{"backend": {still, stale}},
+		labelID: 7,
+		labeled: []ArtifactRef{still, stale},
 	}
 	running := []ArtifactRef{still}
 
@@ -98,6 +93,24 @@ func TestReconcileRemovesStaleOnly(t *testing.T) {
 	}
 	if len(f.removed) != 1 || f.removed[0] != stale {
 		t.Errorf("removed %v, want only %v", f.removed, stale)
+	}
+}
+
+func TestReconcileRemovesStaleFromPartialListing(t *testing.T) {
+	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
+	f := &fakeHarbor{
+		labelID: 7,
+		labeled: []ArtifactRef{stale},
+		listErr: errors.New("listing labeled artifacts in team failed"),
+	}
+	running := []ArtifactRef{{Project: "backend", Repository: "api", Digest: digA}}
+
+	err := Reconcile(context.Background(), f, running, "prod")
+	if err == nil {
+		t.Fatal("expected aggregate error when listing is incomplete")
+	}
+	if len(f.removed) != 1 || f.removed[0] != stale {
+		t.Errorf("removed %v, want %v despite partial listing", f.removed, stale)
 	}
 }
 

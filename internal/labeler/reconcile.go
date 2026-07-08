@@ -10,8 +10,7 @@ import (
 // HarborAPI is the Harbor surface Reconcile needs; *Client implements it.
 type HarborAPI interface {
 	EnsureGlobalLabel(ctx context.Context, name string) (int64, error)
-	ListProjects(ctx context.Context) ([]string, error)
-	ListLabeledArtifacts(ctx context.Context, project string, labelID int64) ([]ArtifactRef, error)
+	ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error)
 	AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
 	RemoveLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
 }
@@ -46,29 +45,21 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 	}
 
 	// Detach the label from artifacts that are no longer running.
-	projects, err := harbor.ListProjects(ctx)
+	labeled, err := harbor.ListAllLabeledArtifacts(ctx, labelID)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("listing projects: %w", err))
-		return errors.Join(errs...)
+		log.Printf("warning: listing labeled artifacts incomplete: %v", err)
+		errs = append(errs, fmt.Errorf("listing labeled artifacts: %w", err))
 	}
-	for _, project := range projects {
-		labeled, err := harbor.ListLabeledArtifacts(ctx, project, labelID)
-		if err != nil {
-			log.Printf("warning: listing labeled artifacts in %s failed: %v", project, err)
-			errs = append(errs, fmt.Errorf("listing labeled artifacts in %s: %w", project, err))
+	for _, artifact := range labeled {
+		if _, isRunning := runningSet[artifact]; isRunning {
 			continue
 		}
-		for _, artifact := range labeled {
-			if _, isRunning := runningSet[artifact]; isRunning {
-				continue
-			}
-			if err := harbor.RemoveLabel(ctx, artifact, labelID); err != nil {
-				log.Printf("warning: unlabeling %s failed: %v", artifact, err)
-				errs = append(errs, fmt.Errorf("unlabeling %s: %w", artifact, err))
-				continue
-			}
-			log.Printf("removed %s from %s (no longer running)", labelName, artifact)
+		if err := harbor.RemoveLabel(ctx, artifact, labelID); err != nil {
+			log.Printf("warning: unlabeling %s failed: %v", artifact, err)
+			errs = append(errs, fmt.Errorf("unlabeling %s: %w", artifact, err))
+			continue
 		}
+		log.Printf("removed %s from %s (no longer running)", labelName, artifact)
 	}
 
 	return errors.Join(errs...)

@@ -1,7 +1,14 @@
 name: publish
+# Runs only after the e2e workflow succeeded for a push to main, so a broken
+# image can never be published before e2e catches it. Docs-only pushes don't
+# trigger e2e (path filter) and therefore don't refresh the :main snapshot —
+# they don't change the image. workflow_dispatch is the manual escape hatch.
 on:
-  push:
+  workflow_run:
+    workflows: [e2e]
+    types: [completed]
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: write # release job creates the git tag + github release
   packages: write
@@ -13,9 +20,19 @@ env:
   CONTAINERS_REGISTRIES_CONF: /dev/null
 jobs:
   publish:
+    # workflow_run fires for every completed e2e run on head branch main,
+    # including failures and fork PRs from a branch named main — publish only
+    # on a successful run for a push.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # publish exactly the commit e2e tested, not main's current tip
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: cachix/install-nix-action@v31
       # CI (nix flake check, incl. formatting) is nixbot's job; publish stays
       # gated on the image build, whose buildGoModule check phase runs the go

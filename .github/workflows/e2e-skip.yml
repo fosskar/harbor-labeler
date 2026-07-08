@@ -1,0 +1,24 @@
+# Companion to e2e.yml for the required "e2e" branch-protection check: the
+# real suite has a path filter, so a PR touching none of those paths would
+# wait forever on an "Expected" check that never starts. This no-op reports
+# the same check name (workflow "e2e", job "e2e") for the complementary path
+# set — paths-ignore here must mirror the paths list in e2e.yml exactly.
+name: e2e
+on:
+  pull_request:
+    paths-ignore:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - chart/**
+      - e2e/**
+      - nix/**
+      - flake.nix
+      - flake.lock
+      - .github/workflows/e2e.yml
+permissions: {}
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "no e2e-relevant paths changed; real suite not required"

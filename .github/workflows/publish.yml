@@ -15,7 +15,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
       # CI (nix flake check, incl. formatting) is nixbot's job; publish stays
       # gated on the image build, whose buildGoModule check phase runs the go

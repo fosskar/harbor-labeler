@@ -40,16 +40,16 @@ func TestGetRunningImages(t *testing.T) {
 		name   string
 		pods   []*corev1.Pod
 		phases []corev1.PodPhase
-		want   []string
+		want   []ArtifactRef
 	}{
 		{
-			name: "matching registry returns digest ref without host",
+			name: "matching registry returns artifact without host",
 			pods: []*corev1.Pod{
 				pod("a", "default", []corev1.ContainerStatus{
 					status("harbor.example.com/backend/api@" + digestA),
 				}, nil),
 			},
-			want: []string{"backend/api@" + digestA},
+			want: []ArtifactRef{{Project: "backend", Repository: "api", Digest: digestA}},
 		},
 		{
 			name: "foreign registry filtered out",
@@ -59,7 +59,7 @@ func TestGetRunningImages(t *testing.T) {
 					status("harbor.example.com/backend/api@" + digestB),
 				}, nil),
 			},
-			want: []string{"backend/api@" + digestB},
+			want: []ArtifactRef{{Project: "backend", Repository: "api", Digest: digestB}},
 		},
 		{
 			name: "init containers included",
@@ -68,7 +68,7 @@ func TestGetRunningImages(t *testing.T) {
 					status("harbor.example.com/backend/migrate@" + digestA),
 				}),
 			},
-			want: []string{"backend/migrate@" + digestA},
+			want: []ArtifactRef{{Project: "backend", Repository: "migrate", Digest: digestA}},
 		},
 		{
 			name: "duplicates across pods deduplicated",
@@ -80,7 +80,7 @@ func TestGetRunningImages(t *testing.T) {
 					status("harbor.example.com/backend/api@" + digestA),
 				}, nil),
 			},
-			want: []string{"backend/api@" + digestA},
+			want: []ArtifactRef{{Project: "backend", Repository: "api", Digest: digestA}},
 		},
 		{
 			name: "docker-pullable prefix stripped",
@@ -89,12 +89,31 @@ func TestGetRunningImages(t *testing.T) {
 					status("docker-pullable://harbor.example.com/backend/api@" + digestA),
 				}, nil),
 			},
-			want: []string{"backend/api@" + digestA},
+			want: []ArtifactRef{{Project: "backend", Repository: "api", Digest: digestA}},
 		},
 		{
 			name: "empty imageID skipped",
 			pods: []*corev1.Pod{
 				pod("a", "default", []corev1.ContainerStatus{status("")}, nil),
+			},
+			want: nil,
+		},
+		{
+			name: "ref without project/repository structure skipped",
+			pods: []*corev1.Pod{
+				pod("a", "default", []corev1.ContainerStatus{
+					status("harbor.example.com/no-project-segment@" + digestA),
+					status("harbor.example.com/backend/api@" + digestB),
+				}, nil),
+			},
+			want: []ArtifactRef{{Project: "backend", Repository: "api", Digest: digestB}},
+		},
+		{
+			name: "ref without digest skipped",
+			pods: []*corev1.Pod{
+				pod("a", "default", []corev1.ContainerStatus{
+					status("harbor.example.com/backend/api:v1"),
+				}, nil),
 			},
 			want: nil,
 		},
@@ -105,7 +124,7 @@ func TestGetRunningImages(t *testing.T) {
 					status("harbor.example.com/team/sub/app@" + digestA),
 				}, nil),
 			},
-			want: []string{"team/sub/app@" + digestA},
+			want: []ArtifactRef{{Project: "team", Repository: "sub/app", Digest: digestA}},
 		},
 		{
 			name: "results sorted",
@@ -115,7 +134,10 @@ func TestGetRunningImages(t *testing.T) {
 					status("harbor.example.com/a/app@" + digestA),
 				}, nil),
 			},
-			want: []string{"a/app@" + digestA, "z/app@" + digestB},
+			want: []ArtifactRef{
+				{Project: "a", Repository: "app", Digest: digestA},
+				{Project: "z", Repository: "app", Digest: digestB},
+			},
 		},
 		{
 			name: "nil phases keeps pods in every phase",
@@ -127,7 +149,10 @@ func TestGetRunningImages(t *testing.T) {
 					status("harbor.example.com/batch/job@" + digestB),
 				}, nil),
 			},
-			want: []string{"backend/api@" + digestA, "batch/job@" + digestB},
+			want: []ArtifactRef{
+				{Project: "backend", Repository: "api", Digest: digestA},
+				{Project: "batch", Repository: "job", Digest: digestB},
+			},
 		},
 		{
 			name: "phase filter drops non-matching pod including init containers",
@@ -144,7 +169,7 @@ func TestGetRunningImages(t *testing.T) {
 					}),
 			},
 			phases: []corev1.PodPhase{corev1.PodRunning},
-			want:   []string{"backend/api@" + digestA},
+			want:   []ArtifactRef{{Project: "backend", Repository: "api", Digest: digestA}},
 		},
 		{
 			name: "multi-phase filter includes all listed phases",
@@ -161,7 +186,10 @@ func TestGetRunningImages(t *testing.T) {
 				}),
 			},
 			phases: []corev1.PodPhase{corev1.PodRunning, corev1.PodSucceeded},
-			want:   []string{"backend/api@" + digestA, "batch/job@" + digestB},
+			want: []ArtifactRef{
+				{Project: "backend", Repository: "api", Digest: digestA},
+				{Project: "batch", Repository: "job", Digest: digestB},
+			},
 		},
 	}
 

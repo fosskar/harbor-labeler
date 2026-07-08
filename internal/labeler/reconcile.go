@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 )
 
 // HarborAPI is the Harbor surface Reconcile needs; *Client implements it.
@@ -21,7 +20,7 @@ type HarborAPI interface {
 // it attaches the label to every running artifact and detaches it from every
 // labeled artifact that is no longer running. Per-artifact failures are
 // logged and aggregated; the rest of the run continues.
-func Reconcile(ctx context.Context, harbor HarborAPI, running []string, clusterName string) error {
+func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clusterName string) error {
 	if len(running) == 0 {
 		return errors.New("no running images found in cluster; refusing to strip all labels (is pod discovery broken?)")
 	}
@@ -33,16 +32,11 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []string, clusterN
 	}
 
 	var errs []error
-	runningSet := make(map[string]struct{}, len(running))
+	runningSet := make(map[ArtifactRef]struct{}, len(running))
 
 	// Attach the label to all running artifacts.
-	for _, ref := range running {
-		artifact, ok := parseImageRef(ref)
-		if !ok {
-			log.Printf("skipping image ref %q: no project/repository structure", ref)
-			continue
-		}
-		runningSet[artifact.String()] = struct{}{}
+	for _, artifact := range running {
+		runningSet[artifact] = struct{}{}
 		if err := harbor.AddLabel(ctx, artifact, labelID); err != nil {
 			log.Printf("warning: labeling %s failed: %v", artifact, err)
 			errs = append(errs, fmt.Errorf("labeling %s: %w", artifact, err))
@@ -65,7 +59,7 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []string, clusterN
 			continue
 		}
 		for _, artifact := range labeled {
-			if _, isRunning := runningSet[artifact.String()]; isRunning {
+			if _, isRunning := runningSet[artifact]; isRunning {
 				continue
 			}
 			if err := harbor.RemoveLabel(ctx, artifact, labelID); err != nil {
@@ -78,18 +72,4 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []string, clusterN
 	}
 
 	return errors.Join(errs...)
-}
-
-// parseImageRef splits "project/repo[/sub]@sha256:digest" into an
-// ArtifactRef. Refs without a project/repository structure are rejected.
-func parseImageRef(ref string) (ArtifactRef, bool) {
-	path, digest, ok := strings.Cut(ref, "@")
-	if !ok || digest == "" {
-		return ArtifactRef{}, false
-	}
-	project, repo, ok := strings.Cut(path, "/")
-	if !ok || project == "" || repo == "" {
-		return ArtifactRef{}, false
-	}
-	return ArtifactRef{Project: project, Repository: repo, Digest: digest}, true
 }

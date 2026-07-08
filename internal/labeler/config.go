@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -19,6 +21,9 @@ type Config struct {
 	// RegistryHost is derived from HarborURL; only images pulled from this
 	// host are considered.
 	RegistryHost string
+	// PodPhases restricts image discovery to pods in these phases; empty
+	// means every pod object counts, regardless of phase.
+	PodPhases []corev1.PodPhase
 }
 
 // LoadConfig reads and validates the required environment variables.
@@ -45,7 +50,36 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("HARBOR_URL %q is not a valid URL", cfg.HarborURL)
 	}
 	cfg.RegistryHost = u.Host
+
+	if raw := os.Getenv("POD_PHASES"); raw != "" {
+		cfg.PodPhases, err = parsePodPhases(raw)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	return cfg, nil
+}
+
+// parsePodPhases parses the optional comma-separated POD_PHASES value into
+// canonical pod phases, case-insensitively.
+func parsePodPhases(raw string) ([]corev1.PodPhase, error) {
+	known := map[string]corev1.PodPhase{
+		"pending":   corev1.PodPending,
+		"running":   corev1.PodRunning,
+		"succeeded": corev1.PodSucceeded,
+		"failed":    corev1.PodFailed,
+		"unknown":   corev1.PodUnknown,
+	}
+	items := strings.Split(raw, ",")
+	phases := make([]corev1.PodPhase, 0, len(items))
+	for _, item := range items {
+		phase, ok := known[strings.ToLower(strings.TrimSpace(item))]
+		if !ok {
+			return nil, fmt.Errorf("POD_PHASES: invalid pod phase %q", strings.TrimSpace(item))
+		}
+		phases = append(phases, phase)
+	}
+	return phases, nil
 }
 
 // NewKubeClient builds a clientset from the in-cluster service account when

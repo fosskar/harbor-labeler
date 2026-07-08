@@ -51,6 +51,8 @@ harborLabeler:
   restartPolicy: "Never"
   # Environment variables for the container.
   # For HARBOR_PASSWORD prefer a Secret via envFrom below.
+  # Optional: POD_PHASES ("Running" or a comma-separated phase list)
+  # restricts image discovery; unset, every pod object counts.
   env:
     HARBOR_URL: ""
     HARBOR_USERNAME: ""

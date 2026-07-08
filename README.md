@@ -34,7 +34,7 @@ visible in the CronJob history.
 
 ## Configuration
 
-Four environment variables, all required:
+Four required environment variables, one optional:
 
 | Variable | Description |
 | ----------------- | -------------------------------------------------- |
@@ -42,6 +42,7 @@ Four environment variables, all required:
 | `HARBOR_USERNAME` | Harbor user or robot account |
 | `HARBOR_PASSWORD` | Password or robot token |
 | `CLUSTER_NAME` | Cluster identifier; becomes `running-<name>` |
+| `POD_PHASES` | Optional. Comma-separated pod phases to consider (`Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`), case-insensitive, e.g. `Running`. Unset: every pod object counts — including completed Job pods until they are deleted. |
 
 Outside a cluster the standard kubeconfig resolution applies (`KUBECONFIG`,
 `~/.kube/config`); in-cluster the service account is used.

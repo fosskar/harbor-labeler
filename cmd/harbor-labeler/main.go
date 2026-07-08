@@ -25,7 +25,7 @@ func main() {
 
 	ctx := context.Background()
 
-	images, err := labeler.GetRunningImages(ctx, kubeClient, cfg.RegistryHost)
+	images, err := labeler.GetRunningImages(ctx, kubeClient, cfg.RegistryHost, cfg.PodPhases)
 	if err != nil {
 		log.Fatalf("discovering running images: %v", err)
 	}

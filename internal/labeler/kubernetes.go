@@ -13,15 +13,29 @@ import (
 
 // GetRunningImages lists all pods in the cluster and returns the sorted,
 // unique digest references ("project/repo@sha256:...") of container images
-// hosted on registryHost.
-func GetRunningImages(ctx context.Context, client kubernetes.Interface, registryHost string) ([]string, error) {
+// hosted on registryHost. A non-empty phases list restricts discovery to
+// pods in those phases; empty means every pod object counts.
+func GetRunningImages(ctx context.Context, client kubernetes.Interface, registryHost string, phases []corev1.PodPhase) ([]string, error) {
 	pods, err := client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing pods: %w", err)
 	}
 
+	var phaseSet map[corev1.PodPhase]struct{}
+	if len(phases) > 0 {
+		phaseSet = make(map[corev1.PodPhase]struct{}, len(phases))
+		for _, phase := range phases {
+			phaseSet[phase] = struct{}{}
+		}
+	}
+
 	refs := make(map[string]struct{})
 	for _, pod := range pods.Items {
+		if phaseSet != nil {
+			if _, ok := phaseSet[pod.Status.Phase]; !ok {
+				continue
+			}
+		}
 		collectImageRefs(refs, pod.Status.ContainerStatuses, registryHost)
 		collectImageRefs(refs, pod.Status.InitContainerStatuses, registryHost)
 	}

@@ -10,9 +10,9 @@ import (
 )
 
 type fakeHarbor struct {
-	labelID  int64
-	projects []string
-	labeled  map[string][]ArtifactRef // project -> artifacts carrying the label
+	labelID int64
+	labeled []ArtifactRef // artifacts carrying the label, across all projects
+	listErr error         // returned by ListAllLabeledArtifacts alongside labeled
 
 	ensuredName string
 	added       []ArtifactRef
@@ -25,15 +25,11 @@ func (f *fakeHarbor) EnsureGlobalLabel(ctx context.Context, name string) (int64,
 	return f.labelID, nil
 }
 
-func (f *fakeHarbor) ListProjects(ctx context.Context) ([]string, error) {
-	return f.projects, nil
-}
-
-func (f *fakeHarbor) ListLabeledArtifacts(ctx context.Context, project string, labelID int64) ([]ArtifactRef, error) {
+func (f *fakeHarbor) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error) {
 	if labelID != f.labelID {
 		return nil, fmt.Errorf("unexpected label id %d", labelID)
 	}
-	return f.labeled[project], nil
+	return f.labeled, f.listErr
 }
 
 func (f *fakeHarbor) AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error {
@@ -67,9 +63,9 @@ func TestReconcileAbortsOnZeroImages(t *testing.T) {
 
 func TestReconcileLabelsRunningImages(t *testing.T) {
 	f := &fakeHarbor{labelID: 7}
-	running := []string{
-		"backend/api@" + digA,
-		"team/sub/app@" + digB, // nested repository
+	running := []ArtifactRef{
+		{Project: "backend", Repository: "api", Digest: digA},
+		{Project: "team", Repository: "sub/app", Digest: digB}, // nested repository
 	}
 	if err := Reconcile(context.Background(), f, running, "prod"); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -77,13 +73,9 @@ func TestReconcileLabelsRunningImages(t *testing.T) {
 	if f.ensuredName != "running-prod" {
 		t.Errorf("ensured label %q, want running-prod", f.ensuredName)
 	}
-	want := []ArtifactRef{
-		{Project: "backend", Repository: "api", Digest: digA},
-		{Project: "team", Repository: "sub/app", Digest: digB},
-	}
 	sort.Slice(f.added, func(i, j int) bool { return f.added[i].String() < f.added[j].String() })
-	if !reflect.DeepEqual(f.added, want) {
-		t.Errorf("added %v, want %v", f.added, want)
+	if !reflect.DeepEqual(f.added, running) {
+		t.Errorf("added %v, want %v", f.added, running)
 	}
 }
 
@@ -91,17 +83,34 @@ func TestReconcileRemovesStaleOnly(t *testing.T) {
 	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
 	still := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
 	f := &fakeHarbor{
-		labelID:  7,
-		projects: []string{"backend", "empty"},
-		labeled:  map[string][]ArtifactRef{"backend": {still, stale}},
+		labelID: 7,
+		labeled: []ArtifactRef{still, stale},
 	}
-	running := []string{"backend/api@" + digA}
+	running := []ArtifactRef{still}
 
 	if err := Reconcile(context.Background(), f, running, "prod"); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(f.removed) != 1 || f.removed[0] != stale {
 		t.Errorf("removed %v, want only %v", f.removed, stale)
+	}
+}
+
+func TestReconcileRemovesStaleFromPartialListing(t *testing.T) {
+	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
+	f := &fakeHarbor{
+		labelID: 7,
+		labeled: []ArtifactRef{stale},
+		listErr: errors.New("listing labeled artifacts in team failed"),
+	}
+	running := []ArtifactRef{{Project: "backend", Repository: "api", Digest: digA}}
+
+	err := Reconcile(context.Background(), f, running, "prod")
+	if err == nil {
+		t.Fatal("expected aggregate error when listing is incomplete")
+	}
+	if len(f.removed) != 1 || f.removed[0] != stale {
+		t.Errorf("removed %v, want %v despite partial listing", f.removed, stale)
 	}
 }
 
@@ -112,9 +121,9 @@ func TestReconcileContinuesPastAddFailure(t *testing.T) {
 			"backend/api@" + digA: errors.New("artifact not found"),
 		},
 	}
-	running := []string{
-		"backend/api@" + digA,
-		"backend/worker@" + digB,
+	running := []ArtifactRef{
+		{Project: "backend", Repository: "api", Digest: digA},
+		{Project: "backend", Repository: "worker", Digest: digB},
 	}
 	err := Reconcile(context.Background(), f, running, "prod")
 	if err == nil {
@@ -122,19 +131,5 @@ func TestReconcileContinuesPastAddFailure(t *testing.T) {
 	}
 	if len(f.added) != 1 || f.added[0].Repository != "worker" {
 		t.Errorf("added %v, want worker despite api failure", f.added)
-	}
-}
-
-func TestReconcileSkipsUnparseableRefs(t *testing.T) {
-	f := &fakeHarbor{labelID: 7}
-	running := []string{
-		"no-project-segment@" + digA, // not project/repo — cannot exist in Harbor
-		"backend/api@" + digB,
-	}
-	if err := Reconcile(context.Background(), f, running, "prod"); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(f.added) != 1 || f.added[0].Project != "backend" {
-		t.Errorf("added %v, want only backend/api", f.added)
 	}
 }

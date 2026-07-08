@@ -120,9 +120,24 @@ go build ./cmd/harbor-labeler
 nix fmt
 ```
 
-The test suite runs without a Kubernetes cluster or a Harbor instance: the
-Kubernetes side uses the client-go fake clientset, the Harbor client is tested
-against an `httptest` fake.
+The unit test suite runs without a Kubernetes cluster or a Harbor instance:
+the Kubernetes side uses the client-go fake clientset, the Harbor client is
+tested against an `httptest` fake.
+
+The end-to-end suite verifies against real infrastructure — a kind cluster
+with the official Harbor helm chart deployed inside it, real pods, the real
+binary, and this repo's chart running the labeler in-cluster:
+
+```bash
+./e2e/run.sh   # needs docker; ~10 min on first run (Harbor image pulls)
+```
+
+It covers what the fakes cannot: the Harbor v2 API contract, the `imageID`
+format real containerd reports, env/kubeconfig wiring, and the deployment
+artifact itself (chart rendering, RBAC, in-cluster auth, the OCI image).
+See [e2e/README.md](e2e/README.md) for scope and topology. CI runs it on
+pull requests (`.github/workflows/e2e.yml`); unit tests run everywhere via
+`go test ./...`.
 
 ## License
 

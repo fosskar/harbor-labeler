@@ -10,6 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // GetRunningImages lists all pods in the cluster and returns the sorted,
@@ -90,4 +92,19 @@ func parseImageRef(ref string) (ArtifactRef, bool) {
 		return ArtifactRef{}, false
 	}
 	return ArtifactRef{Project: project, Repository: repo, Digest: digest}, true
+}
+
+// NewKubeClient builds a clientset from the in-cluster service account when
+// running inside Kubernetes, falling back to the standard kubeconfig
+// resolution (KUBECONFIG, ~/.kube/config) otherwise.
+func NewKubeClient() (kubernetes.Interface, error) {
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+		restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, nil).ClientConfig()
+		if err != nil {
+			return nil, fmt.Errorf("building Kubernetes client config: %w", err)
+		}
+	}
+	return kubernetes.NewForConfig(restCfg)
 }

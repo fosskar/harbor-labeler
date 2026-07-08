@@ -7,9 +7,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Config holds everything harbor-labeler needs, sourced from the environment.
@@ -80,19 +77,4 @@ func parsePodPhases(raw string) ([]corev1.PodPhase, error) {
 		phases = append(phases, phase)
 	}
 	return phases, nil
-}
-
-// NewKubeClient builds a clientset from the in-cluster service account when
-// running inside Kubernetes, falling back to the standard kubeconfig
-// resolution (KUBECONFIG, ~/.kube/config) otherwise.
-func NewKubeClient() (kubernetes.Interface, error) {
-	restCfg, err := rest.InClusterConfig()
-	if err != nil {
-		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-		restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, nil).ClientConfig()
-		if err != nil {
-			return nil, fmt.Errorf("building Kubernetes client config: %w", err)
-		}
-	}
-	return kubernetes.NewForConfig(restCfg)
 }

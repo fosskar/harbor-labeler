@@ -23,16 +23,7 @@ func main() {
 		log.Fatalf("harbor client: %v", err)
 	}
 
-	ctx := context.Background()
-
-	images, err := labeler.GetRunningImages(ctx, kubeClient, cfg.RegistryHost, cfg.PodPhases)
-	if err != nil {
-		log.Fatalf("discovering running images: %v", err)
+	if err := labeler.Run(context.Background(), cfg, kubeClient, harborClient); err != nil {
+		log.Fatal(err)
 	}
-	log.Printf("found %d unique running images from %s", len(images), cfg.RegistryHost)
-
-	if err := labeler.Reconcile(ctx, harborClient, images, cfg.ClusterName); err != nil {
-		log.Fatalf("reconcile: %v", err)
-	}
-	log.Printf("reconcile complete for cluster %s", cfg.ClusterName)
 }

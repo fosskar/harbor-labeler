@@ -78,7 +78,9 @@ helm template test ./chart  # render chart
   stdlib `log`, no structured logging.
 - JSON response shapes are anonymous inline structs local to each client
   method; exported surface stays minimal, helpers unexported.
-- Comments: lowercase, only non-obvious "why".
+- Comments: doc comments on declarations follow Go's convention
+  (go.dev/doc/comment) — full sentences starting with the identifier, as the
+  code already does. Inline comments: lowercase, only non-obvious "why".
 - No new dependencies without asking — direct deps are exactly
   `k8s.io/{api,apimachinery,client-go}`; the Harbor client is deliberately
   raw `net/http`, no SDK.

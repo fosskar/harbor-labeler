@@ -30,7 +30,11 @@ func NewKubeDiscovery(client kubernetes.Interface, registryHost string, phases [
 }
 
 // RunningImages lists all pods in the cluster and returns the sorted, unique
-// artifacts whose container images are hosted on the registry host.
+// artifacts whose container images are hosted on the registry host. Each
+// running digest is attributed both to the repository the kubelet reports
+// and to the repository the pod spec declares: containerd dedupes pulls by
+// digest, so the kubelet may name a different repository holding the same
+// digest than the one the workload actually references.
 func (d *KubeDiscovery) RunningImages(ctx context.Context) ([]ArtifactRef, error) {
 	pods, err := d.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -52,8 +56,8 @@ func (d *KubeDiscovery) RunningImages(ctx context.Context) ([]ArtifactRef, error
 				continue
 			}
 		}
-		collectImageRefs(refs, pod.Status.ContainerStatuses, d.registryHost)
-		collectImageRefs(refs, pod.Status.InitContainerStatuses, d.registryHost)
+		collectImageRefs(refs, pod.Status.ContainerStatuses, pod.Spec.Containers, d.registryHost)
+		collectImageRefs(refs, pod.Status.InitContainerStatuses, pod.Spec.InitContainers, d.registryHost)
 	}
 
 	images := make([]ArtifactRef, 0, len(refs))
@@ -69,9 +73,15 @@ func (d *KubeDiscovery) RunningImages(ctx context.Context) ([]ArtifactRef, error
 }
 
 // collectImageRefs extracts artifacts hosted on registryHost from container
-// statuses into refs. Refs without a project/repository structure cannot
-// exist in Harbor and are skipped with a log line.
-func collectImageRefs(refs map[ArtifactRef]struct{}, statuses []corev1.ContainerStatus, registryHost string) {
+// statuses into refs. The digest always comes from the kubelet-attested
+// imageID; the repository comes from the imageID and, paired by container
+// name, from the spec-declared image reference. Refs without a
+// project/repository structure cannot exist in Harbor and are skipped.
+func collectImageRefs(refs map[ArtifactRef]struct{}, statuses []corev1.ContainerStatus, containers []corev1.Container, registryHost string) {
+	specImages := make(map[string]string, len(containers))
+	for _, c := range containers {
+		specImages[c.Name] = c.Image
+	}
 	for _, st := range statuses {
 		imageID := st.ImageID
 		if imageID == "" {
@@ -81,31 +91,55 @@ func collectImageRefs(refs map[ArtifactRef]struct{}, statuses []corev1.Container
 		if idx := strings.Index(imageID, "://"); idx != -1 {
 			imageID = imageID[idx+len("://"):]
 		}
-		host, rest, ok := strings.Cut(imageID, "/")
-		if !ok || host != registryHost {
+		path, digest, ok := strings.Cut(imageID, "@")
+		if !ok || digest == "" {
 			continue
 		}
-		ref, ok := parseImageRef(rest)
-		if !ok {
-			log.Printf("skipping image ref %q: no project/repository structure", rest)
-			continue
+
+		// The repository the kubelet reports.
+		if host, rest, ok := strings.Cut(path, "/"); ok && host == registryHost {
+			if project, repo, ok := splitProjectRepo(rest); ok {
+				refs[ArtifactRef{Project: project, Repository: repo, Digest: digest}] = struct{}{}
+			} else {
+				log.Printf("skipping image ref %q: no project/repository structure", rest)
+			}
 		}
-		refs[ref] = struct{}{}
+
+		// The repository the pod spec declares, paired with the attested
+		// digest.
+		if specPath, ok := specRepoPath(specImages[st.Name], registryHost); ok {
+			if project, repo, ok := splitProjectRepo(specPath); ok {
+				refs[ArtifactRef{Project: project, Repository: repo, Digest: digest}] = struct{}{}
+			}
+		}
 	}
 }
 
-// parseImageRef splits "project/repo[/sub]@sha256:digest" into an
-// ArtifactRef. Refs without a project/repository structure are rejected.
-func parseImageRef(ref string) (ArtifactRef, bool) {
-	path, digest, ok := strings.Cut(ref, "@")
-	if !ok || digest == "" {
-		return ArtifactRef{}, false
-	}
+// splitProjectRepo splits "project/repo[/sub]" into its project and
+// repository parts. Paths without a project/repository structure are
+// rejected.
+func splitProjectRepo(path string) (string, string, bool) {
 	project, repo, ok := strings.Cut(path, "/")
 	if !ok || project == "" || repo == "" {
-		return ArtifactRef{}, false
+		return "", "", false
 	}
-	return ArtifactRef{Project: project, Repository: repo, Digest: digest}, true
+	return project, repo, true
+}
+
+// specRepoPath returns the project/repository path of a spec image
+// reference hosted on registryHost, with any tag or digest suffix removed.
+// A colon inside the host (a port) is preserved; only a tag after the last
+// path separator is stripped.
+func specRepoPath(image, registryHost string) (string, bool) {
+	image, _, _ = strings.Cut(image, "@")
+	if idx := strings.LastIndex(image, ":"); idx > strings.LastIndex(image, "/") {
+		image = image[:idx]
+	}
+	host, rest, ok := strings.Cut(image, "/")
+	if !ok || host != registryHost {
+		return "", false
+	}
+	return rest, true
 }
 
 // NewKubeClient builds a clientset from the in-cluster service account when

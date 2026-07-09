@@ -33,9 +33,14 @@ cmd/harbor-labeler/main.go        wiring only
     (`kubernetes.go`) is the production adapter. Run tests fake discovery
     with artifact lists — no fake clientset needed.
 - Load-bearing invariants:
-  - Matching is **by digest, never tag**: discovery reads
-    `status.containerStatuses[].imageID` (+ init containers), and only refs
-    whose host equals `HARBOR_URL`'s host (port included) count.
+  - Matching is **by digest, never tag**: the digest always comes from the
+    kubelet-attested `status.containerStatuses[].imageID` (+ init
+    containers). Each running digest is attributed to two repositories —
+    the one the imageID reports and the one the matching container's
+    `spec.image` declares (containerd dedupes pulls by digest, so the
+    kubelet may name a different repo holding the same digest than the one
+    the workload references). Both refs count only when their host equals
+    `HARBOR_URL`'s host (port included).
   - **Zero-images safety guard**: empty running set aborts before touching
     Harbor (broken discovery must not strip all labels).
   - Per-artifact failures are logged as warnings, aggregated via

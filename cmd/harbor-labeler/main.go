@@ -23,7 +23,8 @@ func main() {
 		log.Fatalf("harbor client: %v", err)
 	}
 
-	if err := labeler.Run(context.Background(), cfg, kubeClient, harborClient); err != nil {
+	discovery := labeler.NewKubeDiscovery(kubeClient, cfg.RegistryHost, cfg.PodPhases)
+	if err := labeler.Run(context.Background(), cfg.ClusterName, discovery, harborClient); err != nil {
 		log.Fatal(err)
 	}
 }

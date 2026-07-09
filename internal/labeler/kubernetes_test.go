@@ -32,7 +32,7 @@ func podInPhase(name, ns string, phase corev1.PodPhase, statuses, initStatuses [
 	return p
 }
 
-func TestGetRunningImages(t *testing.T) {
+func TestRunningImages(t *testing.T) {
 	const digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
@@ -200,9 +200,9 @@ func TestGetRunningImages(t *testing.T) {
 				objs = append(objs, p)
 			}
 			client := fake.NewSimpleClientset(objs...)
-			got, err := GetRunningImages(context.Background(), client, "harbor.example.com", tt.phases)
+			got, err := NewKubeDiscovery(client, "harbor.example.com", tt.phases).RunningImages(context.Background())
 			if err != nil {
-				t.Fatalf("GetRunningImages: %v", err)
+				t.Fatalf("RunningImages: %v", err)
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got %v, want %v", got, tt.want)

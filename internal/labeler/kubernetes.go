@@ -14,20 +14,33 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// GetRunningImages lists all pods in the cluster and returns the sorted,
-// unique artifacts whose container images are hosted on registryHost. A
-// non-empty phases list restricts discovery to pods in those phases; empty
-// means every pod object counts.
-func GetRunningImages(ctx context.Context, client kubernetes.Interface, registryHost string, phases []corev1.PodPhase) ([]ArtifactRef, error) {
-	pods, err := client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+// KubeDiscovery discovers running artifacts by listing pods in a Kubernetes
+// cluster; it is the ImageDiscovery adapter used in production.
+type KubeDiscovery struct {
+	client       kubernetes.Interface
+	registryHost string
+	phases       []corev1.PodPhase
+}
+
+// NewKubeDiscovery creates a KubeDiscovery that considers only images hosted
+// on registryHost. A non-empty phases list restricts discovery to pods in
+// those phases; empty means every pod object counts.
+func NewKubeDiscovery(client kubernetes.Interface, registryHost string, phases []corev1.PodPhase) *KubeDiscovery {
+	return &KubeDiscovery{client: client, registryHost: registryHost, phases: phases}
+}
+
+// RunningImages lists all pods in the cluster and returns the sorted, unique
+// artifacts whose container images are hosted on the registry host.
+func (d *KubeDiscovery) RunningImages(ctx context.Context) ([]ArtifactRef, error) {
+	pods, err := d.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing pods: %w", err)
 	}
 
 	var phaseSet map[corev1.PodPhase]struct{}
-	if len(phases) > 0 {
-		phaseSet = make(map[corev1.PodPhase]struct{}, len(phases))
-		for _, phase := range phases {
+	if len(d.phases) > 0 {
+		phaseSet = make(map[corev1.PodPhase]struct{}, len(d.phases))
+		for _, phase := range d.phases {
 			phaseSet[phase] = struct{}{}
 		}
 	}
@@ -39,18 +52,19 @@ func GetRunningImages(ctx context.Context, client kubernetes.Interface, registry
 				continue
 			}
 		}
-		collectImageRefs(refs, pod.Status.ContainerStatuses, registryHost)
-		collectImageRefs(refs, pod.Status.InitContainerStatuses, registryHost)
+		collectImageRefs(refs, pod.Status.ContainerStatuses, d.registryHost)
+		collectImageRefs(refs, pod.Status.InitContainerStatuses, d.registryHost)
 	}
 
-	if len(refs) == 0 {
-		return nil, nil
-	}
 	images := make([]ArtifactRef, 0, len(refs))
 	for ref := range refs {
 		images = append(images, ref)
 	}
 	sort.Slice(images, func(i, j int) bool { return images[i].String() < images[j].String() })
+	log.Printf("found %d unique running images from %s", len(images), d.registryHost)
+	if len(images) == 0 {
+		return nil, nil
+	}
 	return images, nil
 }
 

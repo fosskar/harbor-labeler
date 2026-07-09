@@ -17,14 +17,19 @@ Two packages, linear pipeline, no daemon state:
 cmd/harbor-labeler/main.go        wiring only
   LoadConfig()                    env -> Config (RegistryHost = HARBOR_URL host)
   NewKubeClient()                 in-cluster SA, kubeconfig fallback
-  GetRunningImages()              list all pods -> digest refs, host-filtered
+  KubeDiscovery.RunningImages()   list all pods -> digest refs, host-filtered
   Reconcile()                     ensure label, attach running, detach stale
 ```
 
 - `internal/labeler` holds all logic; `main.go` never contains any.
 - `Reconcile` depends on the consumer-defined `HarborAPI` interface
   (`reconcile.go`), not the concrete HTTP `*Client` (`harbor.go`) — this is
-  the unit-test seam. Keep new Harbor calls behind it.
+  the unit-test seam. Keep new Harbor calls behind it. (Matches official Go
+  guidance: interfaces belong in the consuming code, not the implementor —
+  go.dev/wiki/CodeReviewComments#interfaces.)
+- `Run` likewise depends on the consumer-defined `ImageDiscovery` interface
+  (`run.go`); `KubeDiscovery` (`kubernetes.go`) is the production adapter.
+  Run tests fake discovery with artifact lists — no fake clientset needed.
 - Load-bearing invariants:
   - Matching is **by digest, never tag**: discovery reads
     `status.containerStatuses[].imageID` (+ init containers), and only refs

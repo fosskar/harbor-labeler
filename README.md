@@ -101,6 +101,27 @@ harborLabeler:
     # secret: "your-ca-secret"
 ```
 
+### Failure alerting
+
+The job exits non-zero on error, but a CronJob that fails silently for
+weeks means new in-use images never get labeled — and Harbor retention can
+delete them. On clusters with prometheus-operator and kube-state-metrics,
+the chart can ship a `PrometheusRule` covering both failed runs and a
+missing recent success:
+
+```yaml
+monitoring:
+  enabled: true
+  # match your Prometheus rule selector, e.g.:
+  additionalLabels:
+    release: kube-prometheus-stack
+  # alert when no run succeeded within this window (seconds)
+  maxAgeSeconds: 86400
+```
+
+Without prometheus-operator, alert externally on
+`kube_cronjob_status_last_successful_time` going stale for this CronJob.
+
 ## Container image
 
 CI publishes `ghcr.io/fosskar/harbor-labeler`. To build and push manually:

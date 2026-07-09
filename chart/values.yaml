@@ -100,3 +100,14 @@ networkPolicy:
   egressPorts:
     - 443
     - 6443
+# Optional PrometheusRule alerting on persistent CronJob failure. Needs the
+# prometheus-operator PrometheusRule CRD (e.g. kube-prometheus-stack) and
+# kube-state-metrics; inert when disabled.
+monitoring:
+  enabled: false
+  # Extra labels so your Prometheus rule selector picks the rule up,
+  # e.g. release: kube-prometheus-stack
+  additionalLabels: {}
+  # Alert when no run has succeeded within this window (seconds). Size it
+  # to a few missed schedules.
+  maxAgeSeconds: 86400

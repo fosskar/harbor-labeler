@@ -1,0 +1,49 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ template "harbor-labeler.fullname" . }}
+  labels:
+    app: {{ template "harbor-labeler.name" . }}
+    {{- include "harbor-labeler.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: harbor-labeler
+      rules:
+        # jobs get generated names, so match through the CronJob ownership
+        # metric instead of the job name.
+        - alert: HarborLabelerJobFailed
+          expr: >-
+            kube_job_failed{condition="true", namespace="{{ include "harbor-labeler.namespace" . }}"}
+            * on (namespace, job_name) group_left ()
+            kube_job_owner{namespace="{{ include "harbor-labeler.namespace" . }}", owner_kind="CronJob", owner_name="{{ include "harbor-labeler.fullname" . }}"}
+            > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: harbor-labeler job failed
+            description: >-
+              A harbor-labeler job in namespace
+              {{ include "harbor-labeler.namespace" . }} has failed. While the
+              labeler is not running, newly deployed images are not marked as
+              in-use and Harbor retention may delete them.
+        - alert: HarborLabelerNoRecentSuccess
+          expr: >-
+            time()
+            - max(kube_cronjob_status_last_successful_time{namespace="{{ include "harbor-labeler.namespace" . }}", cronjob="{{ include "harbor-labeler.fullname" . }}"})
+            > {{ .Values.monitoring.maxAgeSeconds }}
+          labels:
+            severity: critical
+          annotations:
+            summary: harbor-labeler has not succeeded recently
+            description: >-
+              No harbor-labeler run in namespace
+              {{ include "harbor-labeler.namespace" . }} has succeeded in the
+              last {{ .Values.monitoring.maxAgeSeconds }} seconds. Newly
+              deployed images are not marked as in-use and Harbor retention
+              may delete them.
+{{- end }}

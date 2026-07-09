@@ -96,7 +96,7 @@ func collectImageRefs(refs map[ArtifactRef]struct{}, statuses []corev1.Container
 			continue
 		}
 
-		// The repository the kubelet reports.
+		// the repository the kubelet reports
 		if host, rest, ok := strings.Cut(path, "/"); ok && host == registryHost {
 			if project, repo, ok := splitProjectRepo(rest); ok {
 				refs[ArtifactRef{Project: project, Repository: repo, Digest: digest}] = struct{}{}
@@ -105,11 +105,13 @@ func collectImageRefs(refs map[ArtifactRef]struct{}, statuses []corev1.Container
 			}
 		}
 
-		// The repository the pod spec declares, paired with the attested
-		// digest.
+		// the repository the pod spec declares, paired with the attested
+		// digest
 		if specPath, ok := specRepoPath(specImages[st.Name], registryHost); ok {
 			if project, repo, ok := splitProjectRepo(specPath); ok {
 				refs[ArtifactRef{Project: project, Repository: repo, Digest: digest}] = struct{}{}
+			} else {
+				log.Printf("skipping spec image ref %q: no project/repository structure", specPath)
 			}
 		}
 	}

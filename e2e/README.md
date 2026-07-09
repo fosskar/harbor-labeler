@@ -60,6 +60,7 @@ flowchart TD
   A --> D[detach: delete pod-a, rerun<br/>a unlabeled, b keeps label]
   D --> G[safety guard: delete pod-b, rerun<br/>exit != 0, b keeps label]
   G --> CH[chart run: recreate pod-a,<br/>trigger job from CronJob<br/>a labeled, stale b unlabeled]
+  CH --> P[same-digest promotion: pod from<br/>app-promoted, same digest as app-a<br/>promoted copy labeled]
 ```
 
 ## What it covers
@@ -77,6 +78,10 @@ flowchart TD
   auth (`rest.InClusterConfig`), the ClusterRole granting cluster-wide pod
   list, and the NetworkPolicy egress rules admitting DNS + API server +
   Harbor.
+- **Spec-aware discovery** (same-digest promotion stage) — `app-promoted`
+  shares app-a's digest; a pod referencing the promoted copy gets that
+  artifact labeled regardless of which repository name the kubelet's
+  containerd dedup reports.
 
 ## What it does not cover
 
@@ -87,11 +92,11 @@ flowchart TD
   and the test creates a Job from the CronJob template (what
   `kubectl create job --from=cronjob/...` does). Kubernetes' cron mechanics
   are not ours to test.
-- **Same digest in multiple repositories** — containerd dedupes images by
-  digest, so the kubelet reports one repository per digest. An image
-  promoted unchanged to a second repo may get its label stripped there
-  while running. Known limitation; the test images are built with distinct
-  digests to keep the stages deterministic.
+- **Which name containerd's dedup reports** — the same-digest promotion
+  stage asserts the spec-declared copy is labeled, but deliberately not
+  whether the kubelet reports `app-a` or `app-promoted` for the shared
+  digest; that depends on the node's image cache. app-a and app-b keep
+  distinct digests so the earlier stages stay deterministic.
 - **Scale** — two pods, one project. Pagination paths are unit-tested only.
 
 ## Files

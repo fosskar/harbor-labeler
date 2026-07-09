@@ -388,4 +388,41 @@ func TestReconcileEndToEnd(t *testing.T) {
 			t.Errorf("app-b artifact %s still carries label %s after in-cluster run", digestB, label)
 		}
 	})
+
+	t.Run("same-digest promotion", func(t *testing.T) {
+		promoted := os.Getenv("E2E_IMAGE_PROMOTED")
+		if promoted == "" {
+			t.Skip("E2E_IMAGE_PROMOTED not set; same-digest promotion image not provisioned (see e2e/run.sh)")
+		}
+
+		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-promoted", promoted), metav1.CreateOptions{}); err != nil {
+			t.Fatalf("creating pod-promoted: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = deletePodAndWaitGone(context.Background(), client, "pod-promoted")
+		})
+
+		imageID, err := waitPodRunningWithImageID(ctx, client, "pod-promoted")
+		if err != nil {
+			t.Fatalf("waiting for pod-promoted: %v", err)
+		}
+		// app-promoted shares app-a's digest, so containerd may attribute the
+		// shared digest to either repository; the assertion below must not
+		// depend on which name the kubelet reports.
+		t.Logf("pod-promoted imageID %s", imageID)
+		digest := imageDigest(t, imageID)
+
+		exitCode, out := runLabeler(t)
+		t.Logf("labeler output:\n%s", out)
+		if exitCode != 0 {
+			t.Fatalf("labeler exited %d, want 0", exitCode)
+		}
+
+		// load-bearing: the spec-declared repository gets the label even when
+		// the kubelet attributes the shared digest to app-a. app-a's own label
+		// state is deliberately not asserted: both outcomes are correct.
+		if got := pollHasLabel(t, "app-promoted", digest, label, true); !got {
+			t.Errorf("app-promoted artifact %s missing label %s; spec-aware discovery failed to attribute the shared digest to the declared repository", digest, label)
+		}
+	})
 }

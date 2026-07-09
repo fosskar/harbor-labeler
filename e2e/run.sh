@@ -103,9 +103,11 @@ curl -fsS -u "admin:${admin_password}" -X POST \
 log "pushing test images"
 docker pull busybox:stable
 docker login "$push_registry" -u admin -p "$admin_password"
-# the two images must have distinct digests: containerd dedupes images by
+# app-a and app-b must keep distinct digests: containerd dedupes images by
 # digest, so identical retags would make the kubelet report both pods'
-# imageID under one repository and hide the second artifact from the labeler
+# imageID under one repository and hide the second artifact from the labeler.
+# app-promoted (pushed below) instead deliberately SHARES app-a's digest, to
+# exercise spec-aware discovery.
 for app in app-a app-b; do
   docker build -t "${push_registry}/e2e/${app}:latest" - <<EOF
 FROM busybox:stable
@@ -113,6 +115,12 @@ ENV E2E_APP=${app}
 EOF
   docker push "${push_registry}/e2e/${app}:latest"
 done
+
+# retag app-a into a second repository WITHOUT rebuilding so it shares app-a's
+# digest: the pod references app-promoted, but containerd may attribute the
+# shared digest to either repository.
+docker tag "${push_registry}/e2e/app-a:latest" "${push_registry}/e2e/app-promoted:latest"
+docker push "${push_registry}/e2e/app-promoted:latest"
 
 log "building harbor-labeler binary and image"
 labeler_bin="$workdir/harbor-labeler"
@@ -146,6 +154,7 @@ HARBOR_URL="$harbor_url" \
   LABELER_BIN="$labeler_bin" \
   E2E_IMAGE_A="${registry}/e2e/app-a:latest" \
   E2E_IMAGE_B="${registry}/e2e/app-b:latest" \
+  E2E_IMAGE_PROMOTED="${registry}/e2e/app-promoted:latest" \
   E2E_CRONJOB=harbor-labeler \
   E2E_CRONJOB_NAMESPACE="$labeler_namespace" \
   go test -tags e2e -count=1 -timeout 20m -v ./e2e/...

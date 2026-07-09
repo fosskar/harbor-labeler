@@ -17,9 +17,11 @@ Two packages, linear pipeline, no daemon state, no goroutines:
 cmd/harbor-labeler/main.go        wiring only
   LoadConfig()                    env -> Config (RegistryHost = HARBOR_URL host)
   NewKubeClient()                 in-cluster SA, kubeconfig fallback
+  NewClient()                     Harbor v2 HTTP client
   NewKubeDiscovery()              clientset + registry host + pod phases
-  KubeDiscovery.RunningImages()   list all pods -> digest refs, host-filtered
-  Reconcile()                     ensure label, attach running, detach stale
+  Run()                           orchestration (run.go):
+    ImageDiscovery.RunningImages()  list all pods -> digest refs, host-filtered
+    Reconcile()                     ensure label, attach running, detach stale
 ```
 
 - `internal/labeler` holds all logic; `main.go` never contains any.
@@ -60,7 +62,8 @@ cmd/harbor-labeler/main.go        wiring only
 - `e2e/` — real-infrastructure suite (`run.sh` provisions, `e2e_test.go`
   asserts); read `e2e/README.md` for topology and coverage gaps
 - `chart/` — Helm chart (batch/v1 CronJob + RBAC + ServiceAccount +
-  NetworkPolicy + optional custom-CA ConfigMap/Secret)
+  NetworkPolicy + optional custom-CA ConfigMap; an existing CA Secret can be
+  referenced by name, no Secret template)
 - `nix/` — package, OCI image, devshell, treefmt, nixbot effects
 
 ## Development Commands

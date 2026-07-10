@@ -434,12 +434,11 @@ func TestReconcileEndToEnd(t *testing.T) {
 	})
 
 	t.Run("chart run over TLS", func(t *testing.T) {
-		cronName := os.Getenv("E2E_TLS_CRONJOB")
-		if cronName == "" {
+		cronBase := os.Getenv("E2E_TLS_CRONJOB")
+		if cronBase == "" {
 			t.Skip("E2E_TLS_CRONJOB not set; TLS deployment not provisioned (see e2e/run.sh)")
 		}
 		cronNS := os.Getenv("E2E_CRONJOB_NAMESPACE")
-		tlsLabel := "running-" + os.Getenv("E2E_TLS_CLUSTER_NAME")
 
 		// pod-tls references app-a through the TLS endpoint. The digest is
 		// shared with the plain-http pulls, so containerd's dedup may report
@@ -457,14 +456,22 @@ func TestReconcileEndToEnd(t *testing.T) {
 		}
 		digest := imageDigest(t, imageID)
 
-		// the TLS release reaches Harbor only via https with the private CA
-		// mounted from the referenced ConfigMap; a broken CA mount or
-		// SSL_CERT_DIR wiring fails the job here.
-		logs := runJobFromCron(ctx, t, client, cronNS, cronName, "e2e-chart-run-tls")
-		t.Logf("in-cluster TLS labeler logs:\n%s", logs)
+		// one release per customCAs source variant (referenced ConfigMap,
+		// referenced Secret, inline certificates), named
+		// <E2E_TLS_CRONJOB>-<variant> with cluster name
+		// <E2E_TLS_CLUSTER_NAME>-<variant>. Each reaches Harbor only via
+		// https with the private CA from its source; a broken CA mount or
+		// SSL_CERT_DIR wiring fails that variant's job here.
+		for _, variant := range strings.Fields(os.Getenv("E2E_TLS_VARIANTS")) {
+			t.Run(variant, func(t *testing.T) {
+				label := "running-" + os.Getenv("E2E_TLS_CLUSTER_NAME") + "-" + variant
+				logs := runJobFromCron(ctx, t, client, cronNS, cronBase+"-"+variant, "e2e-chart-run-tls-"+variant)
+				t.Logf("in-cluster TLS labeler logs (%s):\n%s", variant, logs)
 
-		if got := pollHasLabel(t, "app-a", digest, tlsLabel, true); !got {
-			t.Errorf("app-a artifact %s missing label %s after TLS in-cluster run", digest, tlsLabel)
+				if got := pollHasLabel(t, "app-a", digest, label, true); !got {
+					t.Errorf("app-a artifact %s missing label %s after TLS in-cluster run (%s CA)", digest, label, variant)
+				}
+			})
 		}
 	})
 }

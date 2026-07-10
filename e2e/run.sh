@@ -261,25 +261,40 @@ for _ in $(seq 1 30); do
 done
 curl -fsS --cacert "$workdir/tls.crt" "${tls_harbor_url}/api/v2.0/systeminfo" >/dev/null
 
-log "installing harbor-labeler TLS chart release (referenced-ConfigMap CA)"
+# one release per customCAs source variant, each with its own CLUSTER_NAME
+# (harbor-labeler-tls-<variant> / e2e-kind-tls-<variant>): the referenced
+# ConfigMap, the referenced Secret, and inline certificates (chart-rendered
+# ConfigMap) must all end up as a working CA mount.
+tls_variants="configmap secret inline"
 kubectl -n "$labeler_namespace" create configmap harbor-labeler-e2e-ca \
   --from-file=harbor-ca.crt="$workdir/tls.crt" \
   --dry-run=client -o yaml | kubectl apply -f -
-helm upgrade --install harbor-labeler-tls "$repo_root/chart" \
-  --namespace "$labeler_namespace" \
-  --set suspend=true \
-  --set harborLabeler.image.registry="" \
-  --set harborLabeler.image.repository=harbor-labeler \
-  --set-string harborLabeler.image.tag="$version" \
-  --set harborLabeler.image.pullPolicy=Never \
-  --set "harborLabeler.env.HARBOR_URL=${tls_harbor_url}" \
-  --set harborLabeler.env.HARBOR_USERNAME=admin \
-  --set "harborLabeler.env.HARBOR_PASSWORD=${admin_password}" \
-  --set "harborLabeler.env.CLUSTER_NAME=${tls_cluster_label_name}" \
-  --set harborLabeler.customCAs.enabled=true \
-  --set harborLabeler.customCAs.configMap=harbor-labeler-e2e-ca \
-  --set 'networkPolicy.egressPorts={443,6443,'"${tls_port}"'}' \
-  --wait
+kubectl -n "$labeler_namespace" create secret generic harbor-labeler-e2e-ca \
+  --from-file=harbor-ca.crt="$workdir/tls.crt" \
+  --dry-run=client -o yaml | kubectl apply -f -
+for variant in $tls_variants; do
+  log "installing harbor-labeler TLS chart release (${variant} CA)"
+  case "$variant" in
+    configmap) ca_flags=(--set harborLabeler.customCAs.configMap=harbor-labeler-e2e-ca) ;;
+    secret) ca_flags=(--set harborLabeler.customCAs.secret=harbor-labeler-e2e-ca) ;;
+    inline) ca_flags=(--set-file "harborLabeler.customCAs.certificates.harbor-ca\.crt=$workdir/tls.crt") ;;
+  esac
+  helm upgrade --install "harbor-labeler-tls-${variant}" "$repo_root/chart" \
+    --namespace "$labeler_namespace" \
+    --set suspend=true \
+    --set harborLabeler.image.registry="" \
+    --set harborLabeler.image.repository=harbor-labeler \
+    --set-string harborLabeler.image.tag="$version" \
+    --set harborLabeler.image.pullPolicy=Never \
+    --set "harborLabeler.env.HARBOR_URL=${tls_harbor_url}" \
+    --set harborLabeler.env.HARBOR_USERNAME=admin \
+    --set "harborLabeler.env.HARBOR_PASSWORD=${admin_password}" \
+    --set "harborLabeler.env.CLUSTER_NAME=${tls_cluster_label_name}-${variant}" \
+    --set harborLabeler.customCAs.enabled=true \
+    "${ca_flags[@]}" \
+    --set 'networkPolicy.egressPorts={443,6443,'"${tls_port}"'}' \
+    --wait
+done
 
 log "running e2e tests"
 cd "$repo_root"
@@ -296,6 +311,7 @@ HARBOR_URL="$harbor_url" \
   E2E_CRONJOB_NAMESPACE="$labeler_namespace" \
   E2E_TLS_CRONJOB=harbor-labeler-tls \
   E2E_TLS_CLUSTER_NAME="$tls_cluster_label_name" \
+  E2E_TLS_VARIANTS="$tls_variants" \
   go test -tags e2e -count=1 -timeout 20m -v ./e2e/...
 
 log "e2e passed"

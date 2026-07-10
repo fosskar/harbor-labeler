@@ -121,7 +121,8 @@ not on bare PATH. ~3–4 min warm, longer on first run (Harbor images).
 - `e2e/run.sh` — e2e env contract (`HARBOR_URL/USERNAME/PASSWORD`,
   `CLUSTER_NAME`, `LABELER_BIN`, `E2E_IMAGE_A/B`, `E2E_IMAGE_PROMOTED`,
   `E2E_CRONJOB`,
-  `E2E_CRONJOB_NAMESPACE`); tests assume it
+  `E2E_CRONJOB_NAMESPACE`, `E2E_IMAGE_TLS`, `E2E_TLS_CRONJOB`,
+  `E2E_TLS_CLUSTER_NAME`); tests assume it
 
 ## Runtime/Tooling Preferences
 
@@ -158,13 +159,16 @@ not on bare PATH. ~3–4 min warm, longer on first run (Harbor images).
   - `run_test.go` — `fakeDiscovery` implementing `ImageDiscovery`
 - E2E (`nix develop -c ./e2e/run.sh`): kind + real Harbor + real binary +
   the chart running in-cluster; ordered subtests attach → detach → safety
-  guard → chart run → same-digest promotion. `//go:build e2e` tag; skips
+  guard → chart run → same-digest promotion → chart run over TLS (nginx
+  proxy + second chart release with a referenced-ConfigMap custom CA).
+  `//go:build e2e` tag; skips
   without env, so bare
   `go test -tags e2e ./e2e` stays green. `KEEP_CLUSTER=1` keeps the cluster
   for debugging.
-- Known e2e gaps (documented in `e2e/README.md`, don't claim coverage): TLS /
-  custom CAs, cron schedule firing, which repo name containerd's dedup
-  reports for a shared digest, pagination scale.
+- Known e2e gaps (documented in `e2e/README.md`, don't claim coverage): the
+  inline-`certificates` and referenced-Secret `customCAs` variants (only the
+  referenced-ConfigMap path runs e2e), cron schedule firing, which repo name
+  containerd's dedup reports for a shared digest, pagination scale.
 - Unit tests run in `buildGoModule`'s check phase, so `nix build` failing can
   mean a test failure. Behavioral changes need the covering unit test; chart
   or discovery changes warrant an e2e run.

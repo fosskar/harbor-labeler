@@ -15,8 +15,10 @@ set -euo pipefail
 
 cluster_name=harbor-labeler-e2e
 harbor_port=30002
+tls_port=30003
 admin_password=Harbor12345
 cluster_label_name=e2e-kind
+tls_cluster_label_name=e2e-kind-tls
 labeler_namespace=harbor-labeler-system
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 workdir=$(mktemp -d)
@@ -145,6 +147,140 @@ helm upgrade --install harbor-labeler "$repo_root/chart" \
   --set 'networkPolicy.egressPorts={443,6443,'"${harbor_port}"'}' \
   --wait
 
+# --- TLS stage (issue #4): terminate TLS in front of Harbor with nginx on a
+# second NodePort and run a second, suspended chart release against the https
+# endpoint with the referenced-ConfigMap customCAs path. The http topology
+# above stays untouched; spec-aware discovery keeps the stage deterministic
+# even though the TLS pod's digest is shared with the http pulls.
+tls_registry="${node_ip}:${tls_port}"
+tls_harbor_url="https://${tls_registry}"
+
+log "generating self-signed certificate for ${node_ip}"
+(cd "$repo_root" && go run ./e2e/gencert -ip "$node_ip" -dir "$workdir")
+
+log "deploying TLS terminating proxy in front of Harbor"
+
+cat >"$workdir/nginx.conf" <<EOF
+events {}
+http {
+  server {
+    listen 8443 ssl;
+    ssl_certificate /certs/tls.crt;
+    ssl_certificate_key /certs/tls.key;
+    client_max_body_size 0;
+    location / {
+      # keep Harbor's canonical plain-http Host: core builds the token
+      # realm from the externalURL scheme + request Host, so forwarding the
+      # TLS host would yield an http:// realm pointing at this ssl-only
+      # port. With the canonical Host containerd fetches the token via
+      # plain http on ${harbor_port} and pulls manifests/blobs over TLS.
+      proxy_pass http://harbor.harbor.svc.cluster.local:80;
+      proxy_set_header Host ${registry};
+    }
+  }
+}
+EOF
+kubectl -n harbor create secret tls tls-proxy-cert \
+  --cert="$workdir/tls.crt" --key="$workdir/tls.key" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n harbor create configmap tls-proxy-conf \
+  --from-file=nginx.conf="$workdir/nginx.conf" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tls-proxy
+  namespace: harbor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tls-proxy
+  template:
+    metadata:
+      labels:
+        app: tls-proxy
+    spec:
+      containers:
+        - name: nginx
+          # pulled from docker.io by the node: the proxy pod's imageID host
+          # must NOT be the Harbor registry, or the labelers would count it
+          # as a running image and break the safety-guard stage
+          image: nginx:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: cert
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: conf
+          configMap:
+            name: tls-proxy-conf
+        - name: cert
+          secret:
+            secretName: tls-proxy-cert
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tls-proxy
+  namespace: harbor
+spec:
+  type: NodePort
+  selector:
+    app: tls-proxy
+  ports:
+    - port: 8443
+      targetPort: 8443
+      nodePort: ${tls_port}
+EOF
+kubectl -n harbor rollout status deploy/tls-proxy --timeout=120s
+
+# teach the node's containerd to trust the self-signed cert for pulls via the
+# TLS endpoint (picked up without a containerd restart, like the http entry)
+docker exec "$node" mkdir -p "/etc/containerd/certs.d/${tls_registry}"
+docker cp "$workdir/tls.crt" "${node}:/etc/containerd/certs.d/${tls_registry}/ca.crt"
+docker exec -i "$node" tee "/etc/containerd/certs.d/${tls_registry}/hosts.toml" >/dev/null <<EOF
+server = "${tls_harbor_url}"
+[host."${tls_harbor_url}"]
+  ca = "/etc/containerd/certs.d/${tls_registry}/ca.crt"
+EOF
+
+log "waiting for Harbor API via TLS"
+for _ in $(seq 1 30); do
+  if curl -fsS --cacert "$workdir/tls.crt" "${tls_harbor_url}/api/v2.0/systeminfo" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+curl -fsS --cacert "$workdir/tls.crt" "${tls_harbor_url}/api/v2.0/systeminfo" >/dev/null
+
+log "installing harbor-labeler TLS chart release (referenced-ConfigMap CA)"
+kubectl -n "$labeler_namespace" create configmap harbor-labeler-e2e-ca \
+  --from-file=harbor-ca.crt="$workdir/tls.crt" \
+  --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install harbor-labeler-tls "$repo_root/chart" \
+  --namespace "$labeler_namespace" \
+  --set suspend=true \
+  --set harborLabeler.image.registry="" \
+  --set harborLabeler.image.repository=harbor-labeler \
+  --set-string harborLabeler.image.tag="$version" \
+  --set harborLabeler.image.pullPolicy=Never \
+  --set "harborLabeler.env.HARBOR_URL=${tls_harbor_url}" \
+  --set harborLabeler.env.HARBOR_USERNAME=admin \
+  --set "harborLabeler.env.HARBOR_PASSWORD=${admin_password}" \
+  --set "harborLabeler.env.CLUSTER_NAME=${tls_cluster_label_name}" \
+  --set harborLabeler.customCAs.enabled=true \
+  --set harborLabeler.customCAs.configMap=harbor-labeler-e2e-ca \
+  --set 'networkPolicy.egressPorts={443,6443,'"${tls_port}"'}' \
+  --wait
+
 log "running e2e tests"
 cd "$repo_root"
 HARBOR_URL="$harbor_url" \
@@ -155,8 +291,11 @@ HARBOR_URL="$harbor_url" \
   E2E_IMAGE_A="${registry}/e2e/app-a:latest" \
   E2E_IMAGE_B="${registry}/e2e/app-b:latest" \
   E2E_IMAGE_PROMOTED="${registry}/e2e/app-promoted:latest" \
+  E2E_IMAGE_TLS="${tls_registry}/e2e/app-a:latest" \
   E2E_CRONJOB=harbor-labeler \
   E2E_CRONJOB_NAMESPACE="$labeler_namespace" \
+  E2E_TLS_CRONJOB=harbor-labeler-tls \
+  E2E_TLS_CLUSTER_NAME="$tls_cluster_label_name" \
   go test -tags e2e -count=1 -timeout 20m -v ./e2e/...
 
 log "e2e passed"

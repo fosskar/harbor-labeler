@@ -173,6 +173,77 @@ func pollHasLabel(t *testing.T, repo, digest, labelName string, want bool) bool 
 	}
 }
 
+// runJobFromCron mirrors `kubectl create job --from=cronjob/...`: spec
+// verbatim, and template labels copied so the chart's networkpolicy
+// podSelector still matches the job pod. It waits for the job to succeed
+// and returns the job pod logs — the only visibility into the in-cluster
+// run; a failed or timed-out job fails the test.
+func runJobFromCron(ctx context.Context, t *testing.T, client kubernetes.Interface, cronNS, cronName, jobName string) string {
+	t.Helper()
+
+	cron, err := client.BatchV1().CronJobs(cronNS).Get(ctx, cronName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("fetching cronjob %s/%s: %v", cronNS, cronName, err)
+	}
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   jobName,
+			Labels: cron.Spec.JobTemplate.Labels,
+		},
+		Spec: cron.Spec.JobTemplate.Spec,
+	}
+	if _, err := client.BatchV1().Jobs(cronNS).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("creating job %s: %v", jobName, err)
+	}
+	t.Cleanup(func() {
+		propagation := metav1.DeletePropagationBackground
+		_ = client.BatchV1().Jobs(cronNS).Delete(context.Background(), jobName, metav1.DeleteOptions{
+			PropagationPolicy: &propagation,
+		})
+	})
+
+	jobLogs := func() string {
+		pods, err := client.CoreV1().Pods(cronNS).List(ctx, metav1.ListOptions{
+			LabelSelector: "job-name=" + jobName,
+		})
+		if err != nil {
+			return fmt.Sprintf("(listing job pods: %v)", err)
+		}
+		if len(pods.Items) == 0 {
+			return "(no job pods found)"
+		}
+		var sb strings.Builder
+		for _, p := range pods.Items {
+			raw, err := client.CoreV1().Pods(cronNS).GetLogs(p.Name, &corev1.PodLogOptions{}).Do(ctx).Raw()
+			if err != nil {
+				fmt.Fprintf(&sb, "--- %s ---\n(logs unavailable: %v)\n", p.Name, err)
+				continue
+			}
+			fmt.Fprintf(&sb, "--- %s ---\n%s", p.Name, raw)
+		}
+		return sb.String()
+	}
+
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true,
+		func(ctx context.Context) (bool, error) {
+			j, err := client.BatchV1().Jobs(cronNS).Get(ctx, jobName, metav1.GetOptions{})
+			if err != nil {
+				return false, err
+			}
+			for _, c := range j.Status.Conditions {
+				if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+					return false, fmt.Errorf("job failed: %s: %s", c.Reason, c.Message)
+				}
+			}
+			return j.Status.Succeeded >= 1, nil
+		})
+	if err != nil {
+		t.Fatalf("waiting for job %s: %v\nlogs:\n%s", jobName, err, jobLogs())
+	}
+	return jobLogs()
+}
+
 func TestReconcileEndToEnd(t *testing.T) {
 	if os.Getenv("LABELER_BIN") == "" {
 		t.Skip("LABELER_BIN not set; e2e infrastructure not provisioned (see e2e/run.sh)")
@@ -312,72 +383,8 @@ func TestReconcileEndToEnd(t *testing.T) {
 		// the earlier subtests cannot be trusted here
 		digestA = imageDigest(t, imageIDA)
 
-		cron, err := client.BatchV1().CronJobs(cronNS).Get(ctx, cronName, metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("fetching cronjob %s/%s: %v", cronNS, cronName, err)
-		}
-
-		// mirror `kubectl create job --from=cronjob/...`: spec verbatim, and
-		// template labels copied so the chart's networkpolicy podSelector
-		// still matches the job pod
-		const jobName = "e2e-chart-run"
-		job := &batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:   jobName,
-				Labels: cron.Spec.JobTemplate.Labels,
-			},
-			Spec: cron.Spec.JobTemplate.Spec,
-		}
-		if _, err := client.BatchV1().Jobs(cronNS).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-			t.Fatalf("creating job %s: %v", jobName, err)
-		}
-		t.Cleanup(func() {
-			propagation := metav1.DeletePropagationBackground
-			_ = client.BatchV1().Jobs(cronNS).Delete(context.Background(), jobName, metav1.DeleteOptions{
-				PropagationPolicy: &propagation,
-			})
-		})
-
-		// the job pod's logs are the only visibility into the in-cluster run
-		jobLogs := func() string {
-			pods, err := client.CoreV1().Pods(cronNS).List(ctx, metav1.ListOptions{
-				LabelSelector: "job-name=" + jobName,
-			})
-			if err != nil {
-				return fmt.Sprintf("(listing job pods: %v)", err)
-			}
-			if len(pods.Items) == 0 {
-				return "(no job pods found)"
-			}
-			var sb strings.Builder
-			for _, p := range pods.Items {
-				raw, err := client.CoreV1().Pods(cronNS).GetLogs(p.Name, &corev1.PodLogOptions{}).Do(ctx).Raw()
-				if err != nil {
-					fmt.Fprintf(&sb, "--- %s ---\n(logs unavailable: %v)\n", p.Name, err)
-					continue
-				}
-				fmt.Fprintf(&sb, "--- %s ---\n%s", p.Name, raw)
-			}
-			return sb.String()
-		}
-
-		err = wait.PollUntilContextTimeout(ctx, 2*time.Second, 3*time.Minute, true,
-			func(ctx context.Context) (bool, error) {
-				j, err := client.BatchV1().Jobs(cronNS).Get(ctx, jobName, metav1.GetOptions{})
-				if err != nil {
-					return false, err
-				}
-				for _, c := range j.Status.Conditions {
-					if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-						return false, fmt.Errorf("job failed: %s: %s", c.Reason, c.Message)
-					}
-				}
-				return j.Status.Succeeded >= 1, nil
-			})
-		if err != nil {
-			t.Fatalf("waiting for job %s: %v\nlogs:\n%s", jobName, err, jobLogs())
-		}
-		t.Logf("in-cluster labeler logs:\n%s", jobLogs())
+		logs := runJobFromCron(ctx, t, client, cronNS, cronName, "e2e-chart-run")
+		t.Logf("in-cluster labeler logs:\n%s", logs)
 
 		if got := pollHasLabel(t, "app-a", digestA, label, true); !got {
 			t.Errorf("app-a artifact %s missing label %s after in-cluster run", digestA, label)
@@ -423,6 +430,41 @@ func TestReconcileEndToEnd(t *testing.T) {
 		// state is deliberately not asserted: both outcomes are correct.
 		if got := pollHasLabel(t, "app-promoted", digest, label, true); !got {
 			t.Errorf("app-promoted artifact %s missing label %s; spec-aware discovery failed to attribute the shared digest to the declared repository", digest, label)
+		}
+	})
+
+	t.Run("chart run over TLS", func(t *testing.T) {
+		cronName := os.Getenv("E2E_TLS_CRONJOB")
+		if cronName == "" {
+			t.Skip("E2E_TLS_CRONJOB not set; TLS deployment not provisioned (see e2e/run.sh)")
+		}
+		cronNS := os.Getenv("E2E_CRONJOB_NAMESPACE")
+		tlsLabel := "running-" + os.Getenv("E2E_TLS_CLUSTER_NAME")
+
+		// pod-tls references app-a through the TLS endpoint. The digest is
+		// shared with the plain-http pulls, so containerd's dedup may report
+		// either repository in the imageID; spec-aware discovery attributes
+		// the digest to the spec-declared TLS host either way.
+		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-tls", os.Getenv("E2E_IMAGE_TLS")), metav1.CreateOptions{}); err != nil {
+			t.Fatalf("creating pod-tls: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = deletePodAndWaitGone(context.Background(), client, "pod-tls")
+		})
+		imageID, err := waitPodRunningWithImageID(ctx, client, "pod-tls")
+		if err != nil {
+			t.Fatalf("waiting for pod-tls: %v", err)
+		}
+		digest := imageDigest(t, imageID)
+
+		// the TLS release reaches Harbor only via https with the private CA
+		// mounted from the referenced ConfigMap; a broken CA mount or
+		// SSL_CERT_DIR wiring fails the job here.
+		logs := runJobFromCron(ctx, t, client, cronNS, cronName, "e2e-chart-run-tls")
+		t.Logf("in-cluster TLS labeler logs:\n%s", logs)
+
+		if got := pollHasLabel(t, "app-a", digest, tlsLabel, true); !got {
+			t.Errorf("app-a artifact %s missing label %s after TLS in-cluster run", digest, tlsLabel)
 		}
 	})
 }

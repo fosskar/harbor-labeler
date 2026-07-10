@@ -56,6 +56,31 @@ Use a system-level robot account with:
 - repository: list, artifact: list
 - artifact-label: create/delete on the relevant projects
 
+## Using the label with retention policies
+
+An important limitation first: **Harbor's tag retention rules cannot
+filter by label** (checked against Harbor 2.13 — the rule dialog offers no
+label filter, and the label selector is disabled in Harbor's retention
+code). The `running-<cluster>` label therefore does not automatically
+protect artifacts; it makes in-use artifacts *visible* so you can build
+deletion workflows that respect them:
+
+- **Dry-run cross-check.** Retention rules combine with OR and support
+  count/age templates plus repository/tag filters. Before enabling a rule,
+  use **Dry Run** and check the candidate deletions against artifacts
+  carrying `running-*` labels in the artifact list.
+- **Label-aware cleanup scripts.** For automated deletion, query the
+  artifact API yourself and skip anything carrying a `running-*` label —
+  labels are first-class in the Harbor API (this tool manages them through
+  the same endpoints), unlike in retention rules.
+- **Generous windows.** If you rely on plain retention rules, size them
+  against your slowest redeploy cycle, and don't use the "pulled within
+  the last # days" templates as a proxy for "running": nodes cache images,
+  so a pod can run for months without a single re-pull.
+
+See the [Harbor tag retention docs](https://goharbor.io/docs/2.13.0/working-with-projects/working-with-images/create-tag-retention-rules/)
+for rule semantics.
+
 ## Deploy with Helm
 
 Image and chart are published to ghcr.io on every push to main (image tag
@@ -162,6 +187,28 @@ pull requests (`.github/workflows/e2e.yml`); unit tests run everywhere via
 
 Design decisions and their rationale are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md).
+
+## Troubleshooting
+
+**`found 0 unique running images` and a non-zero exit** — the safety guard
+aborted the run (see above). Almost always a host-matching problem: an
+image only counts if its registry host — including the port — equals the
+host of `HARBOR_URL`. Compare `kubectl get pod ... -o jsonpath='{.status.containerStatuses[*].imageID}'` against your
+`HARBOR_URL`. Common causes:
+
+- `HARBOR_URL` includes a port but pods pull without one (or vice versa).
+- Pods pull through a pull-through cache or mirror, so the kubelet reports
+  the mirror's host. The digest is also attributed to the repository named
+  in the pod's `spec.image`, so this still works as long as the pod spec
+  references the Harbor host — but if the spec references the mirror too,
+  the image is invisible to the labeler.
+- `POD_PHASES` set too strictly, filtering out every pod.
+
+**Label attached but artifacts still deleted** — Harbor retention rules
+cannot filter by label, so a retention or GC policy will delete labeled
+artifacts like any others. The label is advisory: it feeds dry-run review
+and label-aware cleanup scripts (see "Using the label with retention
+policies" above).
 
 ## License
 

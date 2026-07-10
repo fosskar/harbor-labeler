@@ -62,8 +62,8 @@ cmd/harbor-labeler/main.go        wiring only
 - `e2e/` — real-infrastructure suite (`run.sh` provisions, `e2e_test.go`
   asserts); read `e2e/README.md` for topology and coverage gaps
 - `chart/` — Helm chart (batch/v1 CronJob + RBAC + ServiceAccount +
-  NetworkPolicy + optional custom-CA ConfigMap; an existing CA Secret can be
-  referenced by name, no Secret template)
+  NetworkPolicy + optional custom-CA ConfigMap + optional PrometheusRule; an
+  existing CA Secret can be referenced by name, no Secret template)
 - `nix/` — package, OCI image, devshell, treefmt, nixbot effects
 - `docs/` — `DECISIONS.md`, append-only design-decision record with
   rationale; add an entry when a decision rules something out
@@ -142,7 +142,8 @@ not on bare PATH. ~3–4 min warm, longer on first run (Harbor images).
   push; `e2e.yml` runs the suite on PRs and code pushes to main
   (`e2e-skip.yml` mirrors its path filter so the required check never hangs
   on docs-only changes); `publish.yml` triggers via workflow_run on e2e
-  success on main and gates release via skopeo tag-existence check
+  success on main, gates release via skopeo tag-existence check, and
+  refreshes the `:main` snapshot image on non-release pushes
   (`CONTAINERS_REGISTRIES_CONF=/dev/null` works around nixpkgs skopeo on
   ubuntu-latest).
 

@@ -16,6 +16,12 @@ buildGoModule {
 
   subPackages = [ "cmd/harbor-labeler" ];
 
+  # subPackages scopes the check phase too, and cmd/ has no tests — unset it
+  # there so `go test ./...` covers internal/labeler (nix build gates on it).
+  preCheck = ''
+    unset subPackages
+  '';
+
   # Build flags for optimization
   ldflags = [
     "-s"

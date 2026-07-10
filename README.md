@@ -160,6 +160,9 @@ See [e2e/README.md](e2e/README.md) for scope and topology. CI runs it on
 pull requests (`.github/workflows/e2e.yml`); unit tests run everywhere via
 `go test ./...`.
 
+Design decisions and their rationale are recorded in
+[docs/DECISIONS.md](docs/DECISIONS.md).
+
 ## License
 
 MIT

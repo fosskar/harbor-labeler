@@ -65,6 +65,8 @@ cmd/harbor-labeler/main.go        wiring only
   NetworkPolicy + optional custom-CA ConfigMap; an existing CA Secret can be
   referenced by name, no Secret template)
 - `nix/` — package, OCI image, devshell, treefmt, nixbot effects
+- `docs/` — `DECISIONS.md`, append-only design-decision record with
+  rationale; add an entry when a decision rules something out
 
 ## Development Commands
 

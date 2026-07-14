@@ -44,7 +44,7 @@ in
 _args: {
   onSchedule.update-flake-inputs = {
     when = {
-      hour = 4;
+      hour = 0;
       minute = 0;
     };
     outputs.effects.update-flake-inputs = mkRepoEffect "update-flake-inputs" ''

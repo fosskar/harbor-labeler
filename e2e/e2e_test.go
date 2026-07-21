@@ -35,19 +35,19 @@ type artifact struct {
 
 // harborArtifacts queries the Harbor v2 API directly so the test verifies the
 // labeler through a seam independent of internal/labeler.
-func harborArtifacts(t *testing.T, repo string) []artifact {
+func harborArtifacts(t *testing.T, cfg e2eConfig, repo string) []artifact {
 	t.Helper()
 
 	endpoint := fmt.Sprintf(
 		"%s/api/v2.0/projects/e2e/repositories/%s/artifacts?with_label=true",
-		strings.TrimSuffix(os.Getenv("HARBOR_URL"), "/"),
+		cfg.HarborURL,
 		url.PathEscape(repo),
 	)
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		t.Fatalf("building harbor request: %v", err)
 	}
-	req.SetBasicAuth(os.Getenv("HARBOR_USERNAME"), os.Getenv("HARBOR_PASSWORD"))
+	req.SetBasicAuth(cfg.HarborUsername, cfg.HarborPassword)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -79,10 +79,10 @@ func hasLabel(artifacts []artifact, digest, labelName string) bool {
 	return false
 }
 
-func runLabeler(t *testing.T) (int, string) {
+func runLabeler(t *testing.T, cfg e2eConfig) (int, string) {
 	t.Helper()
 
-	cmd := exec.Command(os.Getenv("LABELER_BIN"))
+	cmd := exec.Command(cfg.LabelerBin)
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -161,11 +161,11 @@ func deletePodAndWaitGone(ctx context.Context, client kubernetes.Interface, name
 
 // pollHasLabel re-queries harbor until the label state matches; harbor's
 // labeled-artifact view can lag slightly behind label mutations.
-func pollHasLabel(t *testing.T, repo, digest, labelName string, want bool) bool {
+func pollHasLabel(t *testing.T, cfg e2eConfig, repo, digest, labelName string, want bool) bool {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		got := hasLabel(harborArtifacts(t, repo), digest, labelName)
+		got := hasLabel(harborArtifacts(t, cfg, repo), digest, labelName)
 		if got == want || time.Now().After(deadline) {
 			return got
 		}
@@ -245,11 +245,9 @@ func runJobFromCron(ctx context.Context, t *testing.T, client kubernetes.Interfa
 }
 
 func TestReconcileEndToEnd(t *testing.T) {
-	if os.Getenv("LABELER_BIN") == "" {
-		t.Skip("LABELER_BIN not set; e2e infrastructure not provisioned (see e2e/run.sh)")
-	}
+	cfg := loadE2EConfig(t)
 
-	label := "running-" + os.Getenv("CLUSTER_NAME")
+	label := "running-" + cfg.ClusterName
 	ctx := context.Background()
 
 	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -279,10 +277,9 @@ func TestReconcileEndToEnd(t *testing.T) {
 	})
 
 	ok := t.Run("setup", func(t *testing.T) {
-
 		for name, image := range map[string]string{
-			"pod-a": os.Getenv("E2E_IMAGE_A"),
-			"pod-b": os.Getenv("E2E_IMAGE_B"),
+			"pod-a": cfg.ImageA,
+			"pod-b": cfg.ImageB,
 		} {
 			if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod(name, image), metav1.CreateOptions{}); err != nil {
 				t.Fatalf("creating %s: %v", name, err)
@@ -306,15 +303,15 @@ func TestReconcileEndToEnd(t *testing.T) {
 	}
 
 	ok = t.Run("attach", func(t *testing.T) {
-		exitCode, out := runLabeler(t)
+		exitCode, out := runLabeler(t, cfg)
 		t.Logf("labeler output:\n%s", out)
 		if exitCode != 0 {
 			t.Fatalf("labeler exited %d, want 0", exitCode)
 		}
-		if got := pollHasLabel(t, "app-a", digestA, label, true); !got {
+		if got := pollHasLabel(t, cfg, "app-a", digestA, label, true); !got {
 			t.Errorf("app-a artifact %s missing label %s", digestA, label)
 		}
-		if got := pollHasLabel(t, "app-b", digestB, label, true); !got {
+		if got := pollHasLabel(t, cfg, "app-b", digestB, label, true); !got {
 			t.Errorf("app-b artifact %s missing label %s", digestB, label)
 		}
 	})
@@ -327,15 +324,15 @@ func TestReconcileEndToEnd(t *testing.T) {
 			t.Fatalf("deleting pod-a: %v", err)
 		}
 
-		exitCode, out := runLabeler(t)
+		exitCode, out := runLabeler(t, cfg)
 		t.Logf("labeler output:\n%s", out)
 		if exitCode != 0 {
 			t.Fatalf("labeler exited %d, want 0", exitCode)
 		}
-		if got := pollHasLabel(t, "app-a", digestA, label, false); got {
+		if got := pollHasLabel(t, cfg, "app-a", digestA, label, false); got {
 			t.Errorf("app-a artifact %s still carries label %s after pod deletion", digestA, label)
 		}
-		if got := pollHasLabel(t, "app-b", digestB, label, true); !got {
+		if got := pollHasLabel(t, cfg, "app-b", digestB, label, true); !got {
 			t.Errorf("app-b artifact %s lost label %s while its pod still runs", digestB, label)
 		}
 	})
@@ -348,13 +345,13 @@ func TestReconcileEndToEnd(t *testing.T) {
 			t.Fatalf("deleting pod-b: %v", err)
 		}
 
-		exitCode, out := runLabeler(t)
+		exitCode, out := runLabeler(t, cfg)
 		t.Logf("labeler output:\n%s", out)
 		if exitCode == 0 {
 			t.Fatal("labeler exited 0 with no running images; safety guard should force non-zero exit")
 		}
 		// the guard must leave harbor untouched, so app-b keeps its label
-		if got := pollHasLabel(t, "app-b", digestB, label, true); !got {
+		if got := pollHasLabel(t, cfg, "app-b", digestB, label, true); !got {
 			t.Errorf("app-b artifact %s lost label %s; guard stripped labels despite zero running images", digestB, label)
 		}
 	})
@@ -363,13 +360,7 @@ func TestReconcileEndToEnd(t *testing.T) {
 	}
 
 	t.Run("chart run", func(t *testing.T) {
-		cronName := os.Getenv("E2E_CRONJOB")
-		if cronName == "" {
-			t.Skip("E2E_CRONJOB not set; chart deployment not provisioned (see e2e/run.sh)")
-		}
-		cronNS := os.Getenv("E2E_CRONJOB_NAMESPACE")
-
-		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-a", os.Getenv("E2E_IMAGE_A")), metav1.CreateOptions{}); err != nil {
+		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-a", cfg.ImageA), metav1.CreateOptions{}); err != nil {
 			t.Fatalf("recreating pod-a: %v", err)
 		}
 		t.Cleanup(func() {
@@ -383,26 +374,21 @@ func TestReconcileEndToEnd(t *testing.T) {
 		// the earlier subtests cannot be trusted here
 		digestA = imageDigest(t, imageIDA)
 
-		logs := runJobFromCron(ctx, t, client, cronNS, cronName, "e2e-chart-run")
+		logs := runJobFromCron(ctx, t, client, cfg.CronjobNamespace, cfg.Cronjob, "e2e-chart-run")
 		t.Logf("in-cluster labeler logs:\n%s", logs)
 
-		if got := pollHasLabel(t, "app-a", digestA, label, true); !got {
+		if got := pollHasLabel(t, cfg, "app-a", digestA, label, true); !got {
 			t.Errorf("app-a artifact %s missing label %s after in-cluster run", digestA, label)
 		}
 		// the guard stage left app-b's label behind; the in-cluster run sees
 		// pod-a only, so it must detach the stale app-b label
-		if got := pollHasLabel(t, "app-b", digestB, label, false); got {
+		if got := pollHasLabel(t, cfg, "app-b", digestB, label, false); got {
 			t.Errorf("app-b artifact %s still carries label %s after in-cluster run", digestB, label)
 		}
 	})
 
 	t.Run("same-digest promotion", func(t *testing.T) {
-		promoted := os.Getenv("E2E_IMAGE_PROMOTED")
-		if promoted == "" {
-			t.Skip("E2E_IMAGE_PROMOTED not set; same-digest promotion image not provisioned (see e2e/run.sh)")
-		}
-
-		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-promoted", promoted), metav1.CreateOptions{}); err != nil {
+		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-promoted", cfg.ImagePromoted), metav1.CreateOptions{}); err != nil {
 			t.Fatalf("creating pod-promoted: %v", err)
 		}
 		t.Cleanup(func() {
@@ -419,7 +405,7 @@ func TestReconcileEndToEnd(t *testing.T) {
 		t.Logf("pod-promoted imageID %s", imageID)
 		digest := imageDigest(t, imageID)
 
-		exitCode, out := runLabeler(t)
+		exitCode, out := runLabeler(t, cfg)
 		t.Logf("labeler output:\n%s", out)
 		if exitCode != 0 {
 			t.Fatalf("labeler exited %d, want 0", exitCode)
@@ -428,23 +414,17 @@ func TestReconcileEndToEnd(t *testing.T) {
 		// load-bearing: the spec-declared repository gets the label even when
 		// the kubelet attributes the shared digest to app-a. app-a's own label
 		// state is deliberately not asserted: both outcomes are correct.
-		if got := pollHasLabel(t, "app-promoted", digest, label, true); !got {
+		if got := pollHasLabel(t, cfg, "app-promoted", digest, label, true); !got {
 			t.Errorf("app-promoted artifact %s missing label %s; spec-aware discovery failed to attribute the shared digest to the declared repository", digest, label)
 		}
 	})
 
 	t.Run("chart run over TLS", func(t *testing.T) {
-		cronBase := os.Getenv("E2E_TLS_CRONJOB")
-		if cronBase == "" {
-			t.Skip("E2E_TLS_CRONJOB not set; TLS deployment not provisioned (see e2e/run.sh)")
-		}
-		cronNS := os.Getenv("E2E_CRONJOB_NAMESPACE")
-
 		// pod-tls references app-a through the TLS endpoint. The digest is
 		// shared with the plain-http pulls, so containerd's dedup may report
 		// either repository in the imageID; spec-aware discovery attributes
 		// the digest to the spec-declared TLS host either way.
-		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-tls", os.Getenv("E2E_IMAGE_TLS")), metav1.CreateOptions{}); err != nil {
+		if _, err := client.CoreV1().Pods(namespaceName).Create(ctx, makePod("pod-tls", cfg.TLS.Image), metav1.CreateOptions{}); err != nil {
 			t.Fatalf("creating pod-tls: %v", err)
 		}
 		t.Cleanup(func() {
@@ -462,13 +442,13 @@ func TestReconcileEndToEnd(t *testing.T) {
 		// <E2E_TLS_CLUSTER_NAME>-<variant>. Each reaches Harbor only via
 		// https with the private CA from its source; a broken CA mount or
 		// SSL_CERT_DIR wiring fails that variant's job here.
-		for _, variant := range strings.Fields(os.Getenv("E2E_TLS_VARIANTS")) {
+		for _, variant := range cfg.TLS.Variants {
 			t.Run(variant, func(t *testing.T) {
-				label := "running-" + os.Getenv("E2E_TLS_CLUSTER_NAME") + "-" + variant
-				logs := runJobFromCron(ctx, t, client, cronNS, cronBase+"-"+variant, "e2e-chart-run-tls-"+variant)
+				label := "running-" + cfg.TLS.ClusterName + "-" + variant
+				logs := runJobFromCron(ctx, t, client, cfg.CronjobNamespace, cfg.TLS.Cronjob+"-"+variant, "e2e-chart-run-tls-"+variant)
 				t.Logf("in-cluster TLS labeler logs (%s):\n%s", variant, logs)
 
-				if got := pollHasLabel(t, "app-a", digest, label, true); !got {
+				if got := pollHasLabel(t, cfg, "app-a", digest, label, true); !got {
 					t.Errorf("app-a artifact %s missing label %s after TLS in-cluster run (%s CA)", digest, label, variant)
 				}
 			})

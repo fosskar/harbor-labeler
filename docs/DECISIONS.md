@@ -102,3 +102,18 @@ the way, worth remembering: Harbor core builds the token-service realm as
 so a TLS proxy in front of plain-http Harbor must pin the forwarded Host
 to the canonical http endpoint or containerd's anonymous token fetch
 breaks.
+
+## 11. e2e env contract is all-or-nothing, no per-stage skips
+
+The suite reads its env contract through one validated struct
+(`loadE2EConfig` in `e2e/config_test.go`): an entirely unset contract
+skips the suite (bare `go test -tags e2e ./e2e` stays green), a partially
+set one fails it, naming the set and missing variables. Previously each
+optional stage guarded itself with `t.Skip` on its own variable — but
+`run.sh` always provisions everything, so those skips could only ever fire
+on a renamed or dropped export, silently deleting coverage while CI stayed
+green (a `LABELER_BIN` rename would have skipped the whole suite the same
+way). Validation also shape-checks locally (URL parse, binary executable,
+non-empty TLS variants) but never probes the network. Rules out: per-stage
+skip guards, partially provisioned runs, and a lone sentinel variable
+deciding skip-vs-fail.

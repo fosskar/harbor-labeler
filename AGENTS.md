@@ -124,7 +124,8 @@ not on bare PATH. ~3–4 min warm, longer on first run (Harbor images).
   `CLUSTER_NAME`, `LABELER_BIN`, `E2E_IMAGE_A/B`, `E2E_IMAGE_PROMOTED`,
   `E2E_CRONJOB`,
   `E2E_CRONJOB_NAMESPACE`, `E2E_IMAGE_TLS`, `E2E_TLS_CRONJOB`,
-  `E2E_TLS_CLUSTER_NAME`, `E2E_TLS_VARIANTS`); tests assume it
+  `E2E_TLS_CLUSTER_NAME`, `E2E_TLS_VARIANTS`); `e2e/config_test.go`
+  validates it all-or-nothing (`loadE2EConfig`)
 
 ## Runtime/Tooling Preferences
 
@@ -165,9 +166,9 @@ not on bare PATH. ~3–4 min warm, longer on first run (Harbor images).
   guard → chart run → same-digest promotion → chart run over TLS (nginx
   proxy + one chart release per `customCAs` variant: referenced ConfigMap,
   referenced Secret, inline certificates).
-  `//go:build e2e` tag; skips
-  without env, so bare
-  `go test -tags e2e ./e2e` stays green. `KEEP_CLUSTER=1` keeps the cluster
+  `//go:build e2e` tag; the env contract is all-or-nothing: entirely unset
+  skips (bare `go test -tags e2e ./e2e` stays green), partially set fails
+  loudly. `KEEP_CLUSTER=1` keeps the cluster
   for debugging.
 - Known e2e gaps (documented in `e2e/README.md`, don't claim coverage):
   cron schedule firing, which repo name containerd's dedup reports for a

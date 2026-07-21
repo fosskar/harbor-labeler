@@ -114,7 +114,11 @@ flowchart TD
 - `run.sh` — provisioning + teardown; exports the env contract
   (`HARBOR_URL`, `LABELER_BIN`, `E2E_IMAGE_*`, `E2E_CRONJOB*`,
   `E2E_TLS_*`, ...) and runs the suite.
+- `config_test.go` — `loadE2EConfig`, the env contract as one validated
+  struct: all-or-nothing, so a renamed or dropped export in `run.sh` fails
+  the suite loudly instead of silently skipping a stage.
 - `gencert/` — tiny Go helper emitting the self-signed certificate for the
   TLS stage.
-- `e2e_test.go` — the scenario; `//go:build e2e`, skips without
-  `LABELER_BIN` so a bare `go test -tags e2e ./e2e` stays green.
+- `e2e_test.go` — the scenario; `//go:build e2e`, skips when the env
+  contract is entirely unset so a bare `go test -tags e2e ./e2e` stays
+  green; a partially set contract fails.

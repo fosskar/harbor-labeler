@@ -1,36 +1,50 @@
 # harbor-labeler
 
 A Kubernetes CronJob that marks container images in a Harbor registry with a
-`running-<cluster>` label while they are running in your cluster, and removes
-the label once they are not.
+`running-<cluster>` label while pods in your cluster reference them, and
+removes the label once no considered pod does.
 
-This makes it visible in Harbor which artifacts are actually in use — for
-example as a guard when building retention/garbage-collection policies.
+This makes it visible in Harbor which artifacts Kubernetes pod objects still
+reference — for example as a guard when building
+retention/garbage-collection policies.
 
 ## How it works
 
 Each run performs one full reconcile:
 
-1. Lists all pods (all namespaces) and collects the image digests of their
-   containers and init containers.
-1. Keeps only images pulled from this Harbor instance (host derived from
-   `HARBOR_URL`).
+1. Lists all pods in all namespaces, applies the optional `POD_PHASES`
+   filter, and reads kubelet-attested digests from
+   `status.containerStatuses[].imageID` and
+   `status.initContainerStatuses[].imageID`.
+1. Attributes each digest to both the repository reported by the kubelet and
+   the repository declared by the matching container's `spec.image`.
+1. Keeps each reference only when its registry host (including any port)
+   matches the host derived from `HARBOR_URL`.
 1. Ensures the global label `running-<CLUSTER_NAME>` exists in Harbor,
    creating it if missing.
-1. Attaches the label to every running artifact (matched by digest).
+1. Attaches the label to every running artifact, matched by digest.
 1. Lists all artifacts currently carrying the label and detaches it from any
    that are no longer running.
 
 Multiple clusters can safely point at the same Harbor: each cluster only ever
 touches its own `running-<cluster>` label.
 
+Matching is always by digest, never tag. The two repository sources matter
+when containerd deduplicates pulls by digest and reports a different
+repository from the one declared by the workload.
+
 Safety: if the pod scan finds zero matching images, the run aborts without
 touching Harbor — an empty result almost always means discovery is broken,
 and proceeding would strip the label from everything.
 
-Per-artifact failures (e.g. an image that was deleted from Harbor) are logged,
-the run continues, and the job exits non-zero at the end so failures stay
-visible in the CronJob history.
+Recoverable failures for individual artifacts or project listings are logged
+and aggregated. The run continues with the available results, then exits
+non-zero so failures stay visible in the CronJob history.
+
+Harbor listings are read in pages of 100. API requests use up to three
+attempts on transport errors and 5xx responses, but never retry 4xx responses.
+Label attachment and removal are idempotent: an already-attached label and
+an already-removed label or artifact are treated as success.
 
 ## Configuration
 
@@ -83,8 +97,11 @@ for rule semantics.
 
 ## Deploy with Helm
 
-Image and chart are published to ghcr.io on every push to main (image tag
-`latest`) and on `v*` tags (image tag `<version>`).
+The release version comes from `nix/package.nix`. After e2e succeeds on a
+push to `main`, CI publishes a release only when that version is not already
+present in GHCR: image tags `<version>` and `latest`, chart version
+`<version>`, and Git tag/GitHub release `v<version>`. Otherwise it refreshes
+only the image tag `main`; the chart is release-only.
 
 ```bash
 helm install harbor-labeler oci://ghcr.io/fosskar/charts/harbor-labeler \
@@ -93,6 +110,12 @@ helm install harbor-labeler oci://ghcr.io/fosskar/charts/harbor-labeler \
   --set harborLabeler.env.HARBOR_PASSWORD=... \
   --set harborLabeler.env.CLUSTER_NAME=production
 ```
+
+The chart defaults to a one-minute schedule, forbids overlapping runs, and
+gives each Job 900 seconds to finish. It creates a dedicated ServiceAccount,
+cluster-wide `pods/list` RBAC, and, when enforced by the cluster's CNI, a
+NetworkPolicy restricting egress to DNS plus TCP ports 443 and 6443. If
+Harbor uses another port, add it to `networkPolicy.egressPorts`.
 
 Prefer a Secret for the token:
 
@@ -149,20 +172,27 @@ Without prometheus-operator, alert externally on
 
 ## Container image
 
-CI publishes `ghcr.io/fosskar/harbor-labeler`. To build and push manually:
+Release images are published as `ghcr.io/fosskar/harbor-labeler:<version>`
+and `:latest`; non-release builds from `main` use `:main`. To build and push
+the current version manually:
 
 ```bash
+version="$(nix eval --raw .#default.version)"
 nix build .#image
-./result | docker load        # streamLayeredImage emits a tar stream
-docker push ghcr.io/fosskar/harbor-labeler:0.1.0
+./result | docker load
+docker tag "harbor-labeler:$version" "ghcr.io/fosskar/harbor-labeler:$version"
+docker push "ghcr.io/fosskar/harbor-labeler:$version"
 ```
 
 ## Development
 
 ```bash
-nix develop        # go, gopls, helm
+nix develop                 # go, gopls, kind, kubectl, helm
 go test ./...
 go build ./cmd/harbor-labeler
+helm template test ./chart
+nix build                   # static binary; runs unit tests
+nix build .#image           # OCI image tar stream
 nix fmt
 ```
 
@@ -175,15 +205,19 @@ with the official Harbor helm chart deployed inside it, real pods, the real
 binary, and this repo's chart running the labeler in-cluster:
 
 ```bash
-./e2e/run.sh   # needs docker; ~10 min on first run (Harbor image pulls)
+nix develop -c ./e2e/run.sh # Linux and docker required
 ```
 
 It covers what the fakes cannot: the Harbor v2 API contract, the `imageID`
-format real containerd reports, env/kubeconfig wiring, and the deployment
-artifact itself (chart rendering, RBAC, in-cluster auth, the OCI image).
-See [e2e/README.md](e2e/README.md) for scope and topology. CI runs it on
-pull requests (`.github/workflows/e2e.yml`); unit tests run everywhere via
-`go test ./...`.
+format real containerd reports, env/kubeconfig wiring, chart rendering,
+RBAC, in-cluster auth, the OCI image, same-digest repository promotion, and
+all three custom-CA sources. See [e2e/README.md](e2e/README.md) for exact
+scope, topology, and known gaps.
+
+CI runs e2e on pull requests and pushes to `main` that touch code, chart,
+e2e, or Nix inputs, plus manual dispatch. nixbot runs `nix flake check`,
+which checks formatting, runs unit tests while building the binary, builds
+the OCI image, and lints and renders the chart.
 
 Design decisions and their rationale are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md).

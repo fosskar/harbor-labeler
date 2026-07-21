@@ -79,6 +79,25 @@ func TestReconcileLabelsRunningImages(t *testing.T) {
 	}
 }
 
+func TestReconcileAddsOnlyMissingLabels(t *testing.T) {
+	alreadyLabeled := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	missing := ArtifactRef{Project: "backend", Repository: "worker", Digest: digB}
+	f := &fakeHarbor{
+		labelID: 7,
+		labeled: []ArtifactRef{alreadyLabeled},
+	}
+
+	if err := Reconcile(context.Background(), f, []ArtifactRef{alreadyLabeled, missing}, "prod"); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(f.added) != 1 || f.added[0] != missing {
+		t.Errorf("added %v, want only %v", f.added, missing)
+	}
+	if f.removed != nil {
+		t.Errorf("removed %v, want none", f.removed)
+	}
+}
+
 func TestReconcileRemovesStaleOnly(t *testing.T) {
 	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
 	still := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
@@ -94,16 +113,21 @@ func TestReconcileRemovesStaleOnly(t *testing.T) {
 	if len(f.removed) != 1 || f.removed[0] != stale {
 		t.Errorf("removed %v, want only %v", f.removed, stale)
 	}
+	if f.added != nil {
+		t.Errorf("added %v, want none", f.added)
+	}
 }
 
-func TestReconcileRemovesStaleFromPartialListing(t *testing.T) {
+func TestReconcileFallsBackToAllAddsOnPartialListing(t *testing.T) {
 	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
+	alreadyLabeled := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	missing := ArtifactRef{Project: "backend", Repository: "worker", Digest: digB}
 	f := &fakeHarbor{
 		labelID: 7,
-		labeled: []ArtifactRef{stale},
+		labeled: []ArtifactRef{alreadyLabeled, stale},
 		listErr: errors.New("listing labeled artifacts in team failed"),
 	}
-	running := []ArtifactRef{{Project: "backend", Repository: "api", Digest: digA}}
+	running := []ArtifactRef{alreadyLabeled, missing}
 
 	err := Reconcile(context.Background(), f, running, "prod")
 	if err == nil {
@@ -111,6 +135,9 @@ func TestReconcileRemovesStaleFromPartialListing(t *testing.T) {
 	}
 	if len(f.removed) != 1 || f.removed[0] != stale {
 		t.Errorf("removed %v, want %v despite partial listing", f.removed, stale)
+	}
+	if !reflect.DeepEqual(f.added, running) {
+		t.Errorf("added %v, want all running artifacts %v despite partial listing", f.added, running)
 	}
 }
 

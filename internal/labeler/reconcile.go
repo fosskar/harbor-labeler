@@ -15,10 +15,10 @@ type HarborAPI interface {
 	RemoveLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
 }
 
-// Reconcile makes Harbor's "running-<cluster>" label reflect the running set:
-// it attaches the label to every running artifact and detaches it from every
-// labeled artifact that is no longer running. Per-artifact failures are
-// logged and aggregated; the rest of the run continues.
+// Reconcile makes Harbor's "running-<cluster>" label reflect the running set.
+// It attaches missing labels and detaches labels from artifacts no longer
+// running. Per-artifact failures are logged and aggregated; the rest of the
+// run continues.
 func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clusterName string) error {
 	if len(running) == 0 {
 		return errors.New("no running images found in cluster; refusing to strip all labels (is pod discovery broken?)")
@@ -32,10 +32,26 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 
 	var errs []error
 	runningSet := make(map[ArtifactRef]struct{}, len(running))
-
-	// Attach the label to all running artifacts.
 	for _, artifact := range running {
 		runningSet[artifact] = struct{}{}
+	}
+
+	labeled, err := harbor.ListAllLabeledArtifacts(ctx, labelID)
+	listingComplete := err == nil
+	if err != nil {
+		log.Printf("warning: listing labeled artifacts incomplete: %v", err)
+		errs = append(errs, fmt.Errorf("listing labeled artifacts: %w", err))
+	}
+	labeledSet := make(map[ArtifactRef]struct{}, len(labeled))
+	for _, artifact := range labeled {
+		labeledSet[artifact] = struct{}{}
+	}
+
+	for _, artifact := range running {
+		if _, alreadyLabeled := labeledSet[artifact]; listingComplete && alreadyLabeled {
+			continue
+		}
+		// an incomplete listing cannot prove an absent artifact is unlabeled
 		if err := harbor.AddLabel(ctx, artifact, labelID); err != nil {
 			log.Printf("warning: labeling %s failed: %v", artifact, err)
 			errs = append(errs, fmt.Errorf("labeling %s: %w", artifact, err))
@@ -44,12 +60,6 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 		log.Printf("labeled %s with %s", artifact, labelName)
 	}
 
-	// Detach the label from artifacts that are no longer running.
-	labeled, err := harbor.ListAllLabeledArtifacts(ctx, labelID)
-	if err != nil {
-		log.Printf("warning: listing labeled artifacts incomplete: %v", err)
-		errs = append(errs, fmt.Errorf("listing labeled artifacts: %w", err))
-	}
 	for _, artifact := range labeled {
 		if _, isRunning := runningSet[artifact]; isRunning {
 			continue

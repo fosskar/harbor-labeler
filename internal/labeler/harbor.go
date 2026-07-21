@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -112,6 +113,28 @@ func (c *Client) getJSON(ctx context.Context, rawURL string, out any) error {
 	return json.Unmarshal(body, out)
 }
 
+func getAllPages[T any](ctx context.Context, c *Client, rawURL string, out *[]T) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parsing pagination URL: %w", err)
+	}
+	for page := 1; ; page++ {
+		query := u.Query()
+		query.Set("page", strconv.Itoa(page))
+		query.Set("page_size", strconv.Itoa(pageSize))
+		u.RawQuery = query.Encode()
+
+		var items []T
+		if err := c.getJSON(ctx, u.String(), &items); err != nil {
+			return err
+		}
+		*out = append(*out, items...)
+		if len(items) < pageSize {
+			return nil
+		}
+	}
+}
+
 type harborLabel struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
@@ -190,22 +213,18 @@ func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]
 
 // listProjects returns the names of all projects visible to the account.
 func (c *Client) listProjects(ctx context.Context) ([]string, error) {
-	var names []string
-	for page := 1; ; page++ {
-		var projects []struct {
-			Name string `json:"name"`
-		}
-		u := fmt.Sprintf("%s/projects?page=%d&page_size=%d", c.baseURL, page, pageSize)
-		if err := c.getJSON(ctx, u, &projects); err != nil {
-			return nil, err
-		}
-		for _, p := range projects {
-			names = append(names, p.Name)
-		}
-		if len(projects) < pageSize {
-			return names, nil
-		}
+	var projects []struct {
+		Name string `json:"name"`
 	}
+	if err := getAllPages(ctx, c, c.baseURL+"/projects", &projects); err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(projects))
+	for _, project := range projects {
+		names = append(names, project.Name)
+	}
+	return names, nil
 }
 
 // listLabeledArtifacts returns all artifacts in the project that currently
@@ -218,22 +237,17 @@ func (c *Client) listLabeledArtifacts(ctx context.Context, project string, label
 
 	var refs []ArtifactRef
 	for _, repo := range repos {
-		for page := 1; ; page++ {
-			var artifacts []struct {
-				Digest string `json:"digest"`
-			}
-			u := fmt.Sprintf("%s/projects/%s/repositories/%s/artifacts?q=%s&page=%d&page_size=%d",
-				c.baseURL, url.PathEscape(project), encodeRepository(repo),
-				url.QueryEscape(fmt.Sprintf("labels=(%d)", labelID)), page, pageSize)
-			if err := c.getJSON(ctx, u, &artifacts); err != nil {
-				return nil, err
-			}
-			for _, a := range artifacts {
-				refs = append(refs, ArtifactRef{Project: project, Repository: repo, Digest: a.Digest})
-			}
-			if len(artifacts) < pageSize {
-				break
-			}
+		var artifacts []struct {
+			Digest string `json:"digest"`
+		}
+		u := fmt.Sprintf("%s/projects/%s/repositories/%s/artifacts?q=%s",
+			c.baseURL, url.PathEscape(project), encodeRepository(repo),
+			url.QueryEscape(fmt.Sprintf("labels=(%d)", labelID)))
+		if err := getAllPages(ctx, c, u, &artifacts); err != nil {
+			return nil, err
+		}
+		for _, artifact := range artifacts {
+			refs = append(refs, ArtifactRef{Project: project, Repository: repo, Digest: artifact.Digest})
 		}
 	}
 	return refs, nil
@@ -242,23 +256,19 @@ func (c *Client) listLabeledArtifacts(ctx context.Context, project string, label
 // listRepositories returns repository names in the project, without the
 // project name prefix Harbor includes in listings.
 func (c *Client) listRepositories(ctx context.Context, project string) ([]string, error) {
-	var names []string
-	for page := 1; ; page++ {
-		var repos []struct {
-			Name string `json:"name"`
-		}
-		u := fmt.Sprintf("%s/projects/%s/repositories?page=%d&page_size=%d",
-			c.baseURL, url.PathEscape(project), page, pageSize)
-		if err := c.getJSON(ctx, u, &repos); err != nil {
-			return nil, err
-		}
-		for _, r := range repos {
-			names = append(names, strings.TrimPrefix(r.Name, project+"/"))
-		}
-		if len(repos) < pageSize {
-			return names, nil
-		}
+	var repos []struct {
+		Name string `json:"name"`
 	}
+	u := fmt.Sprintf("%s/projects/%s/repositories", c.baseURL, url.PathEscape(project))
+	if err := getAllPages(ctx, c, u, &repos); err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		names = append(names, strings.TrimPrefix(repo.Name, project+"/"))
+	}
+	return names, nil
 }
 
 // AddLabel attaches the label to the artifact. An already-attached label

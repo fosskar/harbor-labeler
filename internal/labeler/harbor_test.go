@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -96,39 +97,58 @@ func TestEnsureGlobalLabelCreatesWhenMissing(t *testing.T) {
 	}
 }
 
-func TestListProjectsPaginates(t *testing.T) {
+func TestListAllLabeledArtifactsPaginatesEveryListing(t *testing.T) {
+	const lastDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		checkAuth(t, r)
-		if r.URL.Path != "/api/v2.0/projects" {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
-			http.NotFound(w, r)
-			return
-		}
-		switch r.URL.Query().Get("page") {
-		case "1":
-			// Full page: exactly page_size entries forces a second request.
-			page := make([]map[string]any, 0, 100)
-			for i := range 100 {
-				page = append(page, map[string]any{"name": fmt.Sprintf("proj-%03d", i)})
+		path := r.URL.EscapedPath()
+		page := r.URL.Query().Get("page")
+
+		switch {
+		case path == "/api/v2.0/projects" && page == "1":
+			projects := make([]map[string]any, 0, pageSize)
+			for i := range pageSize {
+				projects = append(projects, map[string]any{"name": fmt.Sprintf("project-%03d", i)})
 			}
-			writeJSON(w, page)
-		case "2":
-			writeJSON(w, []map[string]any{{"name": "last"}})
-		default:
-			t.Errorf("unexpected page: %s", r.URL.RawQuery)
+			writeJSON(w, projects)
+		case path == "/api/v2.0/projects" && page == "2":
+			writeJSON(w, []map[string]any{{"name": "team"}})
+		case strings.HasPrefix(path, "/api/v2.0/projects/project-") && strings.HasSuffix(path, "/repositories"):
 			writeJSON(w, []map[string]any{})
+		case path == "/api/v2.0/projects/team/repositories" && page == "1":
+			repos := make([]map[string]any, 0, pageSize)
+			for i := range pageSize {
+				repos = append(repos, map[string]any{"name": fmt.Sprintf("team/repo-%03d", i)})
+			}
+			writeJSON(w, repos)
+		case path == "/api/v2.0/projects/team/repositories" && page == "2":
+			writeJSON(w, []map[string]any{{"name": "team/target"}})
+		case strings.HasPrefix(path, "/api/v2.0/projects/team/repositories/repo-") && strings.HasSuffix(path, "/artifacts"):
+			writeJSON(w, []map[string]any{})
+		case path == "/api/v2.0/projects/team/repositories/target/artifacts" && page == "1":
+			artifacts := make([]map[string]any, 0, pageSize)
+			for i := range pageSize {
+				artifacts = append(artifacts, map[string]any{"digest": fmt.Sprintf("sha256:%064d", i)})
+			}
+			writeJSON(w, artifacts)
+		case path == "/api/v2.0/projects/team/repositories/target/artifacts" && page == "2":
+			writeJSON(w, []map[string]any{{"digest": lastDigest}})
+		default:
+			t.Errorf("unexpected request: %s %s?%s", r.Method, path, r.URL.RawQuery)
+			http.NotFound(w, r)
 		}
 	}))
 
-	projects, err := c.listProjects(context.Background())
+	artifacts, err := c.ListAllLabeledArtifacts(context.Background(), 7)
 	if err != nil {
-		t.Fatalf("listProjects: %v", err)
+		t.Fatalf("ListAllLabeledArtifacts: %v", err)
 	}
-	if len(projects) != 101 {
-		t.Fatalf("got %d projects, want 101", len(projects))
+	if len(artifacts) != pageSize+1 {
+		t.Fatalf("got %d artifacts, want %d", len(artifacts), pageSize+1)
 	}
-	if projects[100] != "last" {
-		t.Errorf("last project = %q, want %q", projects[100], "last")
+	wantLast := ArtifactRef{Project: "team", Repository: "target", Digest: lastDigest}
+	if artifacts[pageSize] != wantLast {
+		t.Errorf("last artifact = %v, want %v", artifacts[pageSize], wantLast)
 	}
 }
 

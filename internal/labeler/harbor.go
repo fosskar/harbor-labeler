@@ -19,15 +19,28 @@ const (
 	pageSize    = 100
 )
 
+// ErrArtifactNotFound indicates that Harbor has no artifact for a label operation.
+var ErrArtifactNotFound = errors.New("artifact not found")
+
+type harborProject struct {
+	Name       string `json:"name"`
+	RegistryID int64  `json:"registry_id"`
+}
+
+func (p harborProject) IsProxyCache() bool {
+	return p.RegistryID != 0
+}
+
 // Client is a minimal Harbor v2 API client covering exactly the surface
 // harbor-labeler needs: global labels, project/repository/artifact listing,
 // and artifact label attach/detach.
 type Client struct {
-	baseURL    string // e.g. https://harbor.example.com/api/v2.0
-	username   string
-	password   string
-	http       *http.Client
-	retryDelay time.Duration
+	baseURL       string // e.g. https://harbor.example.com/api/v2.0
+	username      string
+	password      string
+	http          *http.Client
+	retryDelay    time.Duration
+	proxyProjects map[string]struct{}
 }
 
 // ArtifactRef identifies one artifact in Harbor by digest.
@@ -194,16 +207,24 @@ func (c *Client) EnsureGlobalLabel(ctx context.Context, name string) (int64, err
 // currently carries the given label. A project whose listing fails is
 // skipped; partial results are returned together with the joined errors.
 func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error) {
+	c.proxyProjects = nil
 	projects, err := c.listProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing projects: %w", err)
 	}
+	c.proxyProjects = make(map[string]struct{}, len(projects))
+	for _, project := range projects {
+		if project.IsProxyCache() {
+			c.proxyProjects[project.Name] = struct{}{}
+		}
+	}
+
 	var refs []ArtifactRef
 	var errs []error
 	for _, project := range projects {
-		labeled, err := c.listLabeledArtifacts(ctx, project, labelID)
+		labeled, err := c.listLabeledArtifacts(ctx, project.Name, labelID)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("listing labeled artifacts in %s: %w", project, err))
+			errs = append(errs, fmt.Errorf("listing labeled artifacts in %s: %w", project.Name, err))
 			continue
 		}
 		refs = append(refs, labeled...)
@@ -211,20 +232,20 @@ func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]
 	return refs, errors.Join(errs...)
 }
 
+// IsProxyCacheProject reports whether the last successful project listing
+// identified project as a proxy cache.
+func (c *Client) IsProxyCacheProject(project string) bool {
+	_, ok := c.proxyProjects[project]
+	return ok
+}
+
 // listProjects returns the names of all projects visible to the account.
-func (c *Client) listProjects(ctx context.Context) ([]string, error) {
-	var projects []struct {
-		Name string `json:"name"`
-	}
+func (c *Client) listProjects(ctx context.Context) ([]harborProject, error) {
+	var projects []harborProject
 	if err := getAllPages(ctx, c, c.baseURL+"/projects", &projects); err != nil {
 		return nil, err
 	}
-
-	names := make([]string, 0, len(projects))
-	for _, project := range projects {
-		names = append(names, project.Name)
-	}
-	return names, nil
+	return projects, nil
 }
 
 // listLabeledArtifacts returns all artifacts in the project that currently
@@ -282,6 +303,8 @@ func (c *Client) AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) e
 	switch status {
 	case http.StatusOK, http.StatusCreated, http.StatusConflict:
 		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf("adding label to %s: %w: status %d: %s", ref, ErrArtifactNotFound, status, respBody)
 	}
 	return fmt.Errorf("adding label to %s: status %d: %s", ref, status, respBody)
 }

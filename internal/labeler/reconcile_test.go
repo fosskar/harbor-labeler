@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -14,10 +16,11 @@ type fakeHarbor struct {
 	labeled []ArtifactRef // artifacts carrying the label, across all projects
 	listErr error         // returned by ListAllLabeledArtifacts alongside labeled
 
-	ensuredName string
-	added       []ArtifactRef
-	removed     []ArtifactRef
-	failAdd     map[string]error // ArtifactRef.String() -> error
+	ensuredName   string
+	added         []ArtifactRef
+	removed       []ArtifactRef
+	failAdd       map[string]error // ArtifactRef.String() -> error
+	proxyProjects map[string]struct{}
 }
 
 func (f *fakeHarbor) EnsureGlobalLabel(ctx context.Context, name string) (int64, error) {
@@ -38,6 +41,11 @@ func (f *fakeHarbor) AddLabel(ctx context.Context, ref ArtifactRef, labelID int6
 	}
 	f.added = append(f.added, ref)
 	return nil
+}
+
+func (f *fakeHarbor) IsProxyCacheProject(project string) bool {
+	_, ok := f.proxyProjects[project]
+	return ok
 }
 
 func (f *fakeHarbor) RemoveLabel(ctx context.Context, ref ArtifactRef, labelID int64) error {
@@ -159,4 +167,51 @@ func TestReconcileContinuesPastAddFailure(t *testing.T) {
 	if len(f.added) != 1 || f.added[0].Repository != "worker" {
 		t.Errorf("added %v, want worker despite api failure", f.added)
 	}
+}
+
+func TestReconcileMissingArtifactDependsOnProjectType(t *testing.T) {
+	ref := ArtifactRef{Project: "docker-hub", Repository: "aquasec/trivy-operator", Digest: digA}
+	existing := ArtifactRef{Project: "docker-hub", Repository: "library/alpine", Digest: digB}
+
+	t.Run("missing proxy-cache artifact is skipped", func(t *testing.T) {
+		var logs strings.Builder
+		oldWriter := log.Writer()
+		log.SetOutput(&logs)
+		t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+		f := &fakeHarbor{
+			labelID:       7,
+			proxyProjects: map[string]struct{}{"docker-hub": {}},
+			failAdd: map[string]error{
+				ref.String(): fmt.Errorf("adding label: %w", ErrArtifactNotFound),
+			},
+		}
+
+		if err := Reconcile(context.Background(), f, []ArtifactRef{ref, existing}, "siko-qa"); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		if len(f.added) != 1 || f.added[0] != existing {
+			t.Errorf("added %v, want existing proxy artifact %v", f.added, existing)
+		}
+		if !strings.Contains(logs.String(), "skipped missing proxy-cache artifact "+ref.String()) {
+			t.Errorf("logs missing proxy-cache skip: %s", logs.String())
+		}
+		if !strings.Contains(logs.String(), "reconcile complete: labeled=1 already-labeled=0 skipped-missing-proxy=1 failed=0") {
+			t.Errorf("logs missing reconciliation summary: %s", logs.String())
+		}
+	})
+
+	t.Run("missing normal-project artifact remains an error", func(t *testing.T) {
+		f := &fakeHarbor{
+			labelID: 7,
+			failAdd: map[string]error{
+				ref.String(): fmt.Errorf("adding label: %w", ErrArtifactNotFound),
+			},
+		}
+
+		err := Reconcile(context.Background(), f, []ArtifactRef{ref}, "siko-qa")
+		if !errors.Is(err, ErrArtifactNotFound) {
+			t.Fatalf("Reconcile error = %v, want ErrArtifactNotFound", err)
+		}
+	})
 }

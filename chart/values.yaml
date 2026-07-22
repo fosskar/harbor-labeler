@@ -44,7 +44,8 @@ harborLabeler:
   parallelism: 1
   failedJobsHistoryLimit: 10
   successfulJobsHistoryLimit: 5
-  backoffLimit: 10
+  # request retries happen in the binary; the next schedule retries a failed run
+  backoffLimit: 0
   podttl: 3600
   # Kill runs that hang longer than this (seconds).
   activeDeadlineSeconds: 900

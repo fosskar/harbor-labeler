@@ -117,3 +117,13 @@ way). Validation also shape-checks locally (URL parse, binary executable,
 non-empty TLS variants) but never probes the network. Rules out: per-stage
 skip guards, partially provisioned runs, and a lone sentinel variable
 deciding skip-vs-fail.
+
+## 12. Missing proxy-cache artifacts are skipped by project type
+
+Harbor proxy-cache projects are identified from the project API's nonzero
+`registry_id`. An artifact 404 while attaching a label is skipped only for
+those projects because a running upstream image may not exist in Harbor's
+local cache. The same 404 remains fatal for normal projects, where it means
+an owned running artifact was deleted. Rules out: ignoring every artifact
+404, hardcoding proxy project names, and excluding proxy projects from
+labeling.

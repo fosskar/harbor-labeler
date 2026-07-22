@@ -3,6 +3,7 @@ package labeler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -213,6 +214,33 @@ func TestListAllLabeledArtifactsPartialFailure(t *testing.T) {
 	}
 }
 
+func TestListAllLabeledArtifactsRecordsProxyCacheProjects(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/api/v2.0/projects":
+			writeJSON(w, []map[string]any{
+				{"name": "docker-hub", "registry_id": 5},
+				{"name": "owned", "registry_id": nil},
+			})
+		case "/api/v2.0/projects/docker-hub/repositories", "/api/v2.0/projects/owned/repositories":
+			writeJSON(w, []map[string]any{})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.EscapedPath())
+			http.NotFound(w, r)
+		}
+	}))
+
+	if _, err := c.ListAllLabeledArtifacts(context.Background(), 7); err != nil {
+		t.Fatalf("ListAllLabeledArtifacts: %v", err)
+	}
+	if !c.IsProxyCacheProject("docker-hub") {
+		t.Error("docker-hub not detected as proxy cache")
+	}
+	if c.IsProxyCacheProject("owned") {
+		t.Error("owned project incorrectly detected as proxy cache")
+	}
+}
+
 func TestAddLabel(t *testing.T) {
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	ref := ArtifactRef{Project: "backend", Repository: "api", Digest: digest}
@@ -242,6 +270,15 @@ func TestAddLabel(t *testing.T) {
 		}))
 		if err := c.AddLabel(context.Background(), ref, 7); err != nil {
 			t.Fatalf("AddLabel on 409: %v", err)
+		}
+	})
+	t.Run("not found identifies a missing artifact", func(t *testing.T) {
+		c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		err := c.AddLabel(context.Background(), ref, 7)
+		if !errors.Is(err, ErrArtifactNotFound) {
+			t.Fatalf("AddLabel on 404 = %v, want ErrArtifactNotFound", err)
 		}
 	})
 }

@@ -16,7 +16,8 @@ spec:
     spec:
       parallelism: 1
       completions: {{ .Values.completions | default 1 }}
-      backoffLimit: {{ .Values.harborLabeler.backoffLimit | default 5 }}
+      # zero is valid, so do not use Helm's default function here
+      backoffLimit: {{ .Values.harborLabeler.backoffLimit }}
       ttlSecondsAfterFinished: {{ .Values.harborLabeler.podttl | default 3600 }}
       # kill hung runs; a stuck pod holds a live serviceaccount token
       activeDeadlineSeconds: {{ .Values.harborLabeler.activeDeadlineSeconds | default 900 }}

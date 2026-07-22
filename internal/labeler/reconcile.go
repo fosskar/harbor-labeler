@@ -12,6 +12,7 @@ type HarborAPI interface {
 	EnsureGlobalLabel(ctx context.Context, name string) (int64, error)
 	ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error)
 	AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
+	IsProxyCacheProject(project string) bool
 	RemoveLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
 }
 
@@ -31,6 +32,7 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 	}
 
 	var errs []error
+	var labeledCount, alreadyLabeledCount, skippedMissingProxyCount, failedCount int
 	runningSet := make(map[ArtifactRef]struct{}, len(running))
 	for _, artifact := range running {
 		runningSet[artifact] = struct{}{}
@@ -41,6 +43,7 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 	if err != nil {
 		log.Printf("warning: listing labeled artifacts incomplete: %v", err)
 		errs = append(errs, fmt.Errorf("listing labeled artifacts: %w", err))
+		failedCount++
 	}
 	labeledSet := make(map[ArtifactRef]struct{}, len(labeled))
 	for _, artifact := range labeled {
@@ -49,15 +52,23 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 
 	for _, artifact := range running {
 		if _, alreadyLabeled := labeledSet[artifact]; listingComplete && alreadyLabeled {
+			alreadyLabeledCount++
 			continue
 		}
 		// an incomplete listing cannot prove an absent artifact is unlabeled
 		if err := harbor.AddLabel(ctx, artifact, labelID); err != nil {
+			if errors.Is(err, ErrArtifactNotFound) && harbor.IsProxyCacheProject(artifact.Project) {
+				log.Printf("skipped missing proxy-cache artifact %s", artifact)
+				skippedMissingProxyCount++
+				continue
+			}
 			log.Printf("warning: labeling %s failed: %v", artifact, err)
 			errs = append(errs, fmt.Errorf("labeling %s: %w", artifact, err))
+			failedCount++
 			continue
 		}
 		log.Printf("labeled %s with %s", artifact, labelName)
+		labeledCount++
 	}
 
 	for _, artifact := range labeled {
@@ -67,10 +78,13 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 		if err := harbor.RemoveLabel(ctx, artifact, labelID); err != nil {
 			log.Printf("warning: unlabeling %s failed: %v", artifact, err)
 			errs = append(errs, fmt.Errorf("unlabeling %s: %w", artifact, err))
+			failedCount++
 			continue
 		}
 		log.Printf("removed %s from %s (no longer running)", labelName, artifact)
 	}
 
+	log.Printf("reconcile complete: labeled=%d already-labeled=%d skipped-missing-proxy=%d failed=%d",
+		labeledCount, alreadyLabeledCount, skippedMissingProxyCount, failedCount)
 	return errors.Join(errs...)
 }

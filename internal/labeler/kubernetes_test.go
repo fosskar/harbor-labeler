@@ -2,6 +2,7 @@ package labeler
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func pod(name, ns string, statuses, initStatuses []corev1.ContainerStatus) *corev1.Pod {
@@ -385,5 +387,84 @@ func TestRunningImagesRegistryHostWithPort(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunningImagesPaginatesPods(t *testing.T) {
+	const (
+		digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		listAction, ok := action.(k8stesting.ListActionImpl)
+		if !ok {
+			t.Fatalf("action type = %T, want testing.ListActionImpl", action)
+		}
+		options := listAction.GetListOptions()
+		if options.Limit != podPageSize {
+			t.Errorf("limit = %d, want %d", options.Limit, podPageSize)
+		}
+
+		switch options.Continue {
+		case "":
+			return true, &corev1.PodList{
+				ListMeta: metav1.ListMeta{Continue: "next"},
+				Items: []corev1.Pod{*pod("first", "default", []corev1.ContainerStatus{
+					status("harbor.example.com/backend/api@" + digestA),
+				}, nil)},
+			}, nil
+		case "next":
+			return true, &corev1.PodList{
+				Items: []corev1.Pod{*pod("second", "default", []corev1.ContainerStatus{
+					status("harbor.example.com/frontend/web@" + digestB),
+				}, nil)},
+			}, nil
+		default:
+			t.Fatalf("unexpected continue token %q", options.Continue)
+			return true, nil, nil
+		}
+	})
+
+	got, err := NewKubeDiscovery(client, "harbor.example.com", nil).RunningImages(context.Background())
+	if err != nil {
+		t.Fatalf("RunningImages: %v", err)
+	}
+	want := []ArtifactRef{
+		{Project: "backend", Repository: "api", Digest: digestA},
+		{Project: "frontend", Repository: "web", Digest: digestB},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if calls != 2 {
+		t.Errorf("list calls = %d, want 2", calls)
+	}
+}
+
+func TestRunningImagesDiscardsPartialPagesOnFailure(t *testing.T) {
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listAction := action.(k8stesting.ListActionImpl)
+		if listAction.GetListOptions().Continue == "" {
+			return true, &corev1.PodList{
+				ListMeta: metav1.ListMeta{Continue: "next"},
+				Items: []corev1.Pod{*pod("first", "default", []corev1.ContainerStatus{
+					status("harbor.example.com/backend/api@" + digest),
+				}, nil)},
+			}, nil
+		}
+		return true, nil, errors.New("second page failed")
+	})
+
+	got, err := NewKubeDiscovery(client, "harbor.example.com", nil).RunningImages(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got != nil {
+		t.Errorf("got partial images %v, want nil", got)
 	}
 }

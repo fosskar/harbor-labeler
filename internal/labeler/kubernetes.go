@@ -14,6 +14,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+const podPageSize int64 = 500
+
 // KubeDiscovery discovers running artifacts by listing pods in a Kubernetes
 // cluster; it is the ImageDiscovery adapter used in production.
 type KubeDiscovery struct {
@@ -36,11 +38,6 @@ func NewKubeDiscovery(client kubernetes.Interface, registryHost string, phases [
 // digest, so the kubelet may name a different repository holding the same
 // digest than the one the workload actually references.
 func (d *KubeDiscovery) RunningImages(ctx context.Context) ([]ArtifactRef, error) {
-	pods, err := d.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("listing pods: %w", err)
-	}
-
 	var phaseSet map[corev1.PodPhase]struct{}
 	if len(d.phases) > 0 {
 		phaseSet = make(map[corev1.PodPhase]struct{}, len(d.phases))
@@ -50,14 +47,30 @@ func (d *KubeDiscovery) RunningImages(ctx context.Context) ([]ArtifactRef, error
 	}
 
 	refs := make(map[ArtifactRef]struct{})
-	for _, pod := range pods.Items {
-		if phaseSet != nil {
-			if _, ok := phaseSet[pod.Status.Phase]; !ok {
-				continue
-			}
+	continueToken := ""
+	for {
+		pods, err := d.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+			Limit:    podPageSize,
+			Continue: continueToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing pods: %w", err)
 		}
-		collectImageRefs(refs, pod.Status.ContainerStatuses, pod.Spec.Containers, d.registryHost)
-		collectImageRefs(refs, pod.Status.InitContainerStatuses, pod.Spec.InitContainers, d.registryHost)
+
+		for _, pod := range pods.Items {
+			if phaseSet != nil {
+				if _, ok := phaseSet[pod.Status.Phase]; !ok {
+					continue
+				}
+			}
+			collectImageRefs(refs, pod.Status.ContainerStatuses, pod.Spec.Containers, d.registryHost)
+			collectImageRefs(refs, pod.Status.InitContainerStatuses, pod.Spec.InitContainers, d.registryHost)
+		}
+
+		continueToken = pods.Continue
+		if continueToken == "" {
+			break
+		}
 	}
 
 	images := make([]ArtifactRef, 0, len(refs))

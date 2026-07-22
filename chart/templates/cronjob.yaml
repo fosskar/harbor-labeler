@@ -59,8 +59,10 @@ spec:
               {{- end }}
               env:
                 {{- range $key, $value := .Values.harborLabeler.env }}
+                {{- if ne (toString $value) "" }}
                 - name: {{ $key }}
                   value: {{ $value | quote }}
+                {{- end }}
                 {{- end }}
                 {{- if .Values.harborLabeler.customCAs.enabled }}
                 # Go only reads files directly in SSL_CERT_DIR entries; the

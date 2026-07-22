@@ -42,6 +42,17 @@
         chart = pkgs.runCommand "helm-lint" { nativeBuildInputs = [ pkgs.kubernetes-helm ]; } ''
           helm lint ${self.outPath}/chart --strict
           helm template test ${self.outPath}/chart > /dev/null
+          rendered=$TMPDIR/envfrom.yaml
+          helm template envfrom ${self.outPath}/chart \
+            --show-only templates/cronjob.yaml \
+            --set-string harborLabeler.env.HARBOR_URL=https://harbor.example.com,harborLabeler.env.CLUSTER_NAME=test \
+            --set 'harborLabeler.envFrom[0].secretRef.name=harbor-labeler-credentials' \
+            > "$rendered"
+          if grep -Eq 'name: (HARBOR_USERNAME|HARBOR_PASSWORD)$' "$rendered"; then
+            echo "envFrom credentials rendered as explicit env entries" >&2
+            exit 1
+          fi
+          grep -q 'name: harbor-labeler-credentials$' "$rendered"
           touch $out
         '';
       });

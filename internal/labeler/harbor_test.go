@@ -220,9 +220,9 @@ func TestListAllLabeledArtifactsRecordsProxyCacheProjects(t *testing.T) {
 		case "/api/v2.0/projects":
 			writeJSON(w, []map[string]any{
 				{"name": "docker-hub", "registry_id": 5},
-				{"name": "mecom", "registry_id": nil},
+				{"name": "owned", "registry_id": nil},
 			})
-		case "/api/v2.0/projects/docker-hub/repositories", "/api/v2.0/projects/mecom/repositories":
+		case "/api/v2.0/projects/docker-hub/repositories", "/api/v2.0/projects/owned/repositories":
 			writeJSON(w, []map[string]any{})
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.EscapedPath())
@@ -236,8 +236,8 @@ func TestListAllLabeledArtifactsRecordsProxyCacheProjects(t *testing.T) {
 	if !c.IsProxyCacheProject("docker-hub") {
 		t.Error("docker-hub not detected as proxy cache")
 	}
-	if c.IsProxyCacheProject("mecom") {
-		t.Error("mecom incorrectly detected as proxy cache")
+	if c.IsProxyCacheProject("owned") {
+		t.Error("owned project incorrectly detected as proxy cache")
 	}
 }
 

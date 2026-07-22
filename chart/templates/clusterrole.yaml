@@ -9,6 +9,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    # the labeler performs exactly one cluster-wide pod List per run
+    # paged discovery only reads pods cluster-wide
     verbs: ["list"]
 {{- end }}

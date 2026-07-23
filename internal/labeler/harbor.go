@@ -154,24 +154,25 @@ type harborLabel struct {
 	Scope string `json:"scope"`
 }
 
+// FindGlobalLabel returns the ID of an existing global label.
+func (c *Client) FindGlobalLabel(ctx context.Context, name string) (int64, bool, error) {
+	var labels []harborLabel
+	u := fmt.Sprintf("%s/labels?name=%s&scope=g", c.baseURL, url.QueryEscape(name))
+	if err := c.getJSON(ctx, u, &labels); err != nil {
+		return 0, false, err
+	}
+	for _, label := range labels {
+		if label.Name == name {
+			return label.ID, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
 // EnsureGlobalLabel returns the ID of the global label with the given name,
 // creating it if it does not exist yet.
 func (c *Client) EnsureGlobalLabel(ctx context.Context, name string) (int64, error) {
-	find := func() (int64, bool, error) {
-		var labels []harborLabel
-		u := fmt.Sprintf("%s/labels?name=%s&scope=g", c.baseURL, url.QueryEscape(name))
-		if err := c.getJSON(ctx, u, &labels); err != nil {
-			return 0, false, err
-		}
-		for _, l := range labels {
-			if l.Name == name {
-				return l.ID, true, nil
-			}
-		}
-		return 0, false, nil
-	}
-
-	id, found, err := find()
+	id, found, err := c.FindGlobalLabel(ctx, name)
 	if err != nil {
 		return 0, err
 	}
@@ -193,7 +194,7 @@ func (c *Client) EnsureGlobalLabel(ctx context.Context, name string) (int64, err
 		return 0, fmt.Errorf("creating label %q: status %d: %s", name, status, respBody)
 	}
 
-	id, found, err = find()
+	id, found, err = c.FindGlobalLabel(ctx, name)
 	if err != nil {
 		return 0, err
 	}

@@ -38,6 +38,26 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+func TestFindGlobalLabelDoesNotCreateMissingLabel(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checkAuth(t, r)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v2.0/labels" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, []map[string]any{})
+	}))
+
+	id, found, err := c.FindGlobalLabel(context.Background(), "running-prod")
+	if err != nil {
+		t.Fatalf("FindGlobalLabel: %v", err)
+	}
+	if found || id != 0 {
+		t.Errorf("FindGlobalLabel = (%d, %t), want (0, false)", id, found)
+	}
+}
+
 func TestEnsureGlobalLabelFindsExisting(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		checkAuth(t, r)

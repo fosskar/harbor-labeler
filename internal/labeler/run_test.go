@@ -20,7 +20,7 @@ func TestRunLabelsDiscoveredImages(t *testing.T) {
 	ref := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
 	f := &fakeHarbor{labelID: 7}
 
-	if err := Run(context.Background(), "prod", &fakeDiscovery{images: []ArtifactRef{ref}}, f); err != nil {
+	if err := Run(context.Background(), "prod", false, &fakeDiscovery{images: []ArtifactRef{ref}}, f); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if f.ensuredName != "running-prod" {
@@ -34,7 +34,7 @@ func TestRunLabelsDiscoveredImages(t *testing.T) {
 func TestRunPropagatesDiscoveryError(t *testing.T) {
 	f := &fakeHarbor{labelID: 7}
 
-	err := Run(context.Background(), "prod", &fakeDiscovery{err: errors.New("api server down")}, f)
+	err := Run(context.Background(), "prod", false, &fakeDiscovery{err: errors.New("api server down")}, f)
 	if err == nil {
 		t.Fatal("expected discovery error to propagate")
 	}
@@ -49,7 +49,7 @@ func TestRunPropagatesDiscoveryError(t *testing.T) {
 func TestRunPropagatesZeroImageGuard(t *testing.T) {
 	f := &fakeHarbor{labelID: 7}
 
-	if err := Run(context.Background(), "prod", &fakeDiscovery{}, f); err == nil {
+	if err := Run(context.Background(), "prod", false, &fakeDiscovery{}, f); err == nil {
 		t.Fatal("expected error when no running images are discovered")
 	}
 	if f.ensuredName != "" || f.added != nil || f.removed != nil {

@@ -55,6 +55,30 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("dry run accepts true case-insensitively", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("DRY_RUN", "TRUE")
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		if !cfg.DryRun {
+			t.Error("DryRun = false, want true")
+		}
+	})
+
+	t.Run("dry run rejects invalid value", func(t *testing.T) {
+		setAll(t)
+		t.Setenv("DRY_RUN", "1")
+		_, err := LoadConfig()
+		if err == nil {
+			t.Fatal("expected error for invalid DRY_RUN")
+		}
+		if !strings.Contains(err.Error(), "DRY_RUN") {
+			t.Errorf("error %q does not mention DRY_RUN", err)
+		}
+	})
+
 	t.Run("pod phases unset yields nil", func(t *testing.T) {
 		setAll(t)
 		cfg, err := LoadConfig()

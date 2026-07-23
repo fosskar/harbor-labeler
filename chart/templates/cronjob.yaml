@@ -58,7 +58,9 @@ spec:
                   readOnly: true
               {{- end }}
               env:
-                {{- range $key, $value := .Values.harborLabeler.env }}
+                - name: DRY_RUN
+                  value: {{ .Values.harborLabeler.dryRun | default false | quote }}
+                {{- range $key, $value := omit .Values.harborLabeler.env "DRY_RUN" }}
                 {{- if ne (toString $value) "" }}
                 - name: {{ $key }}
                   value: {{ $value | quote }}

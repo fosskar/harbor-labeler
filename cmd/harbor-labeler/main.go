@@ -24,7 +24,7 @@ func main() {
 	}
 
 	discovery := labeler.NewKubeDiscovery(kubeClient, cfg.RegistryHost, cfg.PodPhases)
-	if err := labeler.Run(context.Background(), cfg.ClusterName, discovery, harborClient); err != nil {
+	if err := labeler.Run(context.Background(), cfg.ClusterName, cfg.DryRun, discovery, harborClient); err != nil {
 		log.Fatal(err)
 	}
 }

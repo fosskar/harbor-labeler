@@ -48,7 +48,7 @@ an already-removed label or artifact are treated as success.
 
 ## Configuration
 
-Four required environment variables, one optional:
+Four required environment variables, two optional:
 
 | Variable | Description |
 | ----------------- | -------------------------------------------------- |
@@ -57,6 +57,7 @@ Four required environment variables, one optional:
 | `HARBOR_PASSWORD` | Password or robot token |
 | `CLUSTER_NAME` | Cluster identifier; becomes `running-<name>` |
 | `POD_PHASES` | Optional. Comma-separated pod phases to consider (`Pending`, `Running`, `Succeeded`, `Failed`, `Unknown`), case-insensitive, e.g. `Running`. Unset: every pod object counts — including completed Job pods until they are deleted. |
+| `DRY_RUN` | Optional. `true` previews label creation, attachment, and removal in logs without writing to Harbor; `false` or unset applies changes. Values are case-insensitive. |
 
 Outside a cluster the standard kubeconfig resolution applies (`KUBECONFIG`,
 `~/.kube/config`); in-cluster the service account is used.
@@ -116,6 +117,10 @@ gives each Job 900 seconds to finish. It creates a dedicated ServiceAccount,
 cluster-wide `pods/list` RBAC, and, when enforced by the cluster's CNI, a
 NetworkPolicy restricting egress to DNS plus TCP ports 443 and 6443. If
 Harbor uses another port, add it to `networkPolicy.egressPorts`.
+
+Set `harborLabeler.dryRun: true` to preview reconciliation without creating,
+attaching, or removing Harbor labels. Planned changes are written to the Job
+logs.
 
 Prefer a Secret for the token:
 

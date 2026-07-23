@@ -15,6 +15,7 @@ type Config struct {
 	Username    string
 	Password    string
 	ClusterName string
+	DryRun      bool
 	// RegistryHost is derived from HarborURL; only images pulled from this
 	// host are considered.
 	RegistryHost string
@@ -53,6 +54,14 @@ func LoadConfig() (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
+	}
+
+	switch strings.ToLower(os.Getenv("DRY_RUN")) {
+	case "", "false":
+	case "true":
+		cfg.DryRun = true
+	default:
+		return Config{}, fmt.Errorf("DRY_RUN: must be true or false")
 	}
 	return cfg, nil
 }

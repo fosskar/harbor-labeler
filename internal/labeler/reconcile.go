@@ -9,6 +9,7 @@ import (
 
 // HarborAPI is the Harbor surface Reconcile needs; *Client implements it.
 type HarborAPI interface {
+	FindGlobalLabel(ctx context.Context, name string) (int64, bool, error)
 	EnsureGlobalLabel(ctx context.Context, name string) (int64, error)
 	ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error)
 	AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
@@ -20,15 +21,34 @@ type HarborAPI interface {
 // It attaches missing labels and detaches labels from artifacts no longer
 // running. Per-artifact failures are logged and aggregated; the rest of the
 // run continues.
-func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clusterName string) error {
+func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clusterName string, dryRun bool) error {
 	if len(running) == 0 {
 		return errors.New("no running images found in cluster; refusing to strip all labels (is pod discovery broken?)")
 	}
 
 	labelName := "running-" + clusterName
-	labelID, err := harbor.EnsureGlobalLabel(ctx, labelName)
-	if err != nil {
-		return fmt.Errorf("ensuring label %q: %w", labelName, err)
+	var (
+		labelID int64
+		err     error
+	)
+	if dryRun {
+		var found bool
+		labelID, found, err = harbor.FindGlobalLabel(ctx, labelName)
+		if err != nil {
+			return fmt.Errorf("finding label %q: %w", labelName, err)
+		}
+		if !found {
+			log.Printf("dry-run: would create global label %s", labelName)
+			for _, artifact := range running {
+				log.Printf("dry-run: would label %s with %s", artifact, labelName)
+			}
+			return nil
+		}
+	} else {
+		labelID, err = harbor.EnsureGlobalLabel(ctx, labelName)
+		if err != nil {
+			return fmt.Errorf("ensuring label %q: %w", labelName, err)
+		}
 	}
 
 	var errs []error
@@ -56,6 +76,10 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 			continue
 		}
 		// an incomplete listing cannot prove an absent artifact is unlabeled
+		if dryRun {
+			log.Printf("dry-run: would label %s with %s", artifact, labelName)
+			continue
+		}
 		if err := harbor.AddLabel(ctx, artifact, labelID); err != nil {
 			if errors.Is(err, ErrArtifactNotFound) && harbor.IsProxyCacheProject(artifact.Project) {
 				log.Printf("skipped missing proxy-cache artifact %s", artifact)
@@ -73,6 +97,10 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 
 	for _, artifact := range labeled {
 		if _, isRunning := runningSet[artifact]; isRunning {
+			continue
+		}
+		if dryRun {
+			log.Printf("dry-run: would remove %s from %s (no longer running)", labelName, artifact)
 			continue
 		}
 		if err := harbor.RemoveLabel(ctx, artifact, labelID); err != nil {

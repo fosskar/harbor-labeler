@@ -41,6 +41,8 @@ harborLabeler:
     fsGroup: 3000
     runAsNonRoot: true
   schedule: "* * * * *"
+  # Preview changes without writing to Harbor.
+  dryRun: false
   parallelism: 1
   failedJobsHistoryLimit: 10
   successfulJobsHistoryLimit: 5

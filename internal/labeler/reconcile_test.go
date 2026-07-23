@@ -1,6 +1,7 @@
 package labeler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,15 +13,20 @@ import (
 )
 
 type fakeHarbor struct {
-	labelID int64
-	labeled []ArtifactRef // artifacts carrying the label, across all projects
-	listErr error         // returned by ListAllLabeledArtifacts alongside labeled
+	labelID    int64
+	labeled    []ArtifactRef // artifacts carrying the label, across all projects
+	listErr    error         // returned by ListAllLabeledArtifacts alongside labeled
+	labelFound bool
 
 	ensuredName   string
 	added         []ArtifactRef
 	removed       []ArtifactRef
 	failAdd       map[string]error // ArtifactRef.String() -> error
 	proxyProjects map[string]struct{}
+}
+
+func (f *fakeHarbor) FindGlobalLabel(ctx context.Context, name string) (int64, bool, error) {
+	return f.labelID, f.labelFound, nil
 }
 
 func (f *fakeHarbor) EnsureGlobalLabel(ctx context.Context, name string) (int64, error) {
@@ -60,7 +66,7 @@ const (
 
 func TestReconcileAbortsOnZeroImages(t *testing.T) {
 	f := &fakeHarbor{labelID: 7}
-	err := Reconcile(context.Background(), f, nil, "prod")
+	err := Reconcile(context.Background(), f, nil, "prod", false)
 	if err == nil {
 		t.Fatal("expected error on zero running images")
 	}
@@ -75,7 +81,7 @@ func TestReconcileLabelsRunningImages(t *testing.T) {
 		{Project: "backend", Repository: "api", Digest: digA},
 		{Project: "team", Repository: "sub/app", Digest: digB}, // nested repository
 	}
-	if err := Reconcile(context.Background(), f, running, "prod"); err != nil {
+	if err := Reconcile(context.Background(), f, running, "prod", false); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if f.ensuredName != "running-prod" {
@@ -95,7 +101,7 @@ func TestReconcileAddsOnlyMissingLabels(t *testing.T) {
 		labeled: []ArtifactRef{alreadyLabeled},
 	}
 
-	if err := Reconcile(context.Background(), f, []ArtifactRef{alreadyLabeled, missing}, "prod"); err != nil {
+	if err := Reconcile(context.Background(), f, []ArtifactRef{alreadyLabeled, missing}, "prod", false); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(f.added) != 1 || f.added[0] != missing {
@@ -115,7 +121,7 @@ func TestReconcileRemovesStaleOnly(t *testing.T) {
 	}
 	running := []ArtifactRef{still}
 
-	if err := Reconcile(context.Background(), f, running, "prod"); err != nil {
+	if err := Reconcile(context.Background(), f, running, "prod", false); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(f.removed) != 1 || f.removed[0] != stale {
@@ -137,7 +143,7 @@ func TestReconcileFallsBackToAllAddsOnPartialListing(t *testing.T) {
 	}
 	running := []ArtifactRef{alreadyLabeled, missing}
 
-	err := Reconcile(context.Background(), f, running, "prod")
+	err := Reconcile(context.Background(), f, running, "prod", false)
 	if err == nil {
 		t.Fatal("expected aggregate error when listing is incomplete")
 	}
@@ -160,7 +166,7 @@ func TestReconcileContinuesPastAddFailure(t *testing.T) {
 		{Project: "backend", Repository: "api", Digest: digA},
 		{Project: "backend", Repository: "worker", Digest: digB},
 	}
-	err := Reconcile(context.Background(), f, running, "prod")
+	err := Reconcile(context.Background(), f, running, "prod", false)
 	if err == nil {
 		t.Fatal("expected aggregate error on partial failure")
 	}
@@ -174,10 +180,7 @@ func TestReconcileMissingArtifactDependsOnProjectType(t *testing.T) {
 	existing := ArtifactRef{Project: "docker-hub", Repository: "library/alpine", Digest: digB}
 
 	t.Run("missing proxy-cache artifact is skipped", func(t *testing.T) {
-		var logs strings.Builder
-		oldWriter := log.Writer()
-		log.SetOutput(&logs)
-		t.Cleanup(func() { log.SetOutput(oldWriter) })
+		logs := captureLogs(t)
 
 		f := &fakeHarbor{
 			labelID:       7,
@@ -187,7 +190,7 @@ func TestReconcileMissingArtifactDependsOnProjectType(t *testing.T) {
 			},
 		}
 
-		if err := Reconcile(context.Background(), f, []ArtifactRef{ref, existing}, "siko-qa"); err != nil {
+		if err := Reconcile(context.Background(), f, []ArtifactRef{ref, existing}, "prod", false); err != nil {
 			t.Fatalf("Reconcile: %v", err)
 		}
 		if len(f.added) != 1 || f.added[0] != existing {
@@ -209,9 +212,87 @@ func TestReconcileMissingArtifactDependsOnProjectType(t *testing.T) {
 			},
 		}
 
-		err := Reconcile(context.Background(), f, []ArtifactRef{ref}, "siko-qa")
+		err := Reconcile(context.Background(), f, []ArtifactRef{ref}, "prod", false)
 		if !errors.Is(err, ErrArtifactNotFound) {
 			t.Fatalf("Reconcile error = %v, want ErrArtifactNotFound", err)
 		}
 	})
+}
+
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalOutput) })
+	return &logs
+}
+
+func TestReconcileDryRunReportsChangesWithoutWriting(t *testing.T) {
+	alreadyLabeled := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	missing := ArtifactRef{Project: "backend", Repository: "worker", Digest: digB}
+	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
+	f := &fakeHarbor{
+		labelID:    7,
+		labelFound: true,
+		labeled:    []ArtifactRef{alreadyLabeled, stale},
+	}
+	logs := captureLogs(t)
+
+	if err := Reconcile(context.Background(), f, []ArtifactRef{alreadyLabeled, missing}, "prod", true); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if f.ensuredName != "" || f.added != nil || f.removed != nil {
+		t.Errorf("harbor was mutated in dry-run: %+v", f)
+	}
+	if !strings.Contains(logs.String(), "dry-run: would label "+missing.String()+" with running-prod") {
+		t.Errorf("logs %q missing planned label", logs.String())
+	}
+	if !strings.Contains(logs.String(), "dry-run: would remove running-prod from "+stale.String()) {
+		t.Errorf("logs %q missing planned removal", logs.String())
+	}
+}
+
+func TestReconcileDryRunReportsMissingLabelWithoutWriting(t *testing.T) {
+	running := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	f := &fakeHarbor{labelID: 7}
+	logs := captureLogs(t)
+
+	if err := Reconcile(context.Background(), f, []ArtifactRef{running}, "prod", true); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if f.ensuredName != "" || f.added != nil || f.removed != nil {
+		t.Errorf("harbor was mutated in dry-run: %+v", f)
+	}
+	if !strings.Contains(logs.String(), "dry-run: would create global label running-prod") {
+		t.Errorf("logs %q missing planned label creation", logs.String())
+	}
+	if !strings.Contains(logs.String(), "dry-run: would label "+running.String()+" with running-prod") {
+		t.Errorf("logs %q missing planned attachment", logs.String())
+	}
+}
+
+func TestReconcileDryRunMirrorsPartialListingAndReturnsError(t *testing.T) {
+	running := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	stale := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
+	f := &fakeHarbor{
+		labelID:    7,
+		labelFound: true,
+		labeled:    []ArtifactRef{running, stale},
+		listErr:    errors.New("listing failed"),
+	}
+	logs := captureLogs(t)
+
+	if err := Reconcile(context.Background(), f, []ArtifactRef{running}, "prod", true); err == nil {
+		t.Fatal("expected partial listing error")
+	}
+	if f.added != nil || f.removed != nil {
+		t.Errorf("harbor was mutated in dry-run: %+v", f)
+	}
+	if !strings.Contains(logs.String(), "dry-run: would label "+running.String()+" with running-prod") {
+		t.Errorf("logs %q missing mirrored attachment", logs.String())
+	}
+	if !strings.Contains(logs.String(), "dry-run: would remove running-prod from "+stale.String()) {
+		t.Errorf("logs %q missing known stale removal", logs.String())
+	}
 }

@@ -127,3 +127,19 @@ local cache. The same 404 remains fatal for normal projects, where it means
 an owned running artifact was deleted. Rules out: ignoring every artifact
 404, hardcoding proxy project names, and excluding proxy projects from
 labeling.
+
+## 13. Dry-run is a read-only reconciliation mode
+
+`DRY_RUN=true` performs Kubernetes discovery and Harbor reads, then logs the
+label creation, attachment, and removal requests a normal run would make
+without sending any Harbor write request. The chart exposes the same setting
+as `harborLabeler.dryRun`; configuration remains env-only in the binary, as
+established by decision 6. A missing global label is reported together with
+all attachments that would follow its creation. An incomplete Harbor listing
+mirrors the normal run's safe idempotent attachment requests and known stale
+removals, then exits non-zero because the preview is incomplete.
+
+The Harbor client exposes a read-only `FindGlobalLabel` operation so dry-run
+cannot create the label while inspecting it. Rules out: a CLI flag, treating
+label creation as outside dry-run, skipping Harbor reads, and a wrapper that
+suppresses write methods after reconciliation has already selected them.

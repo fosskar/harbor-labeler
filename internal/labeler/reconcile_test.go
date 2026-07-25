@@ -72,6 +72,76 @@ const (
 	digB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
+func TestPlanChanges(t *testing.T) {
+	api := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	worker := ArtifactRef{Project: "backend", Repository: "worker", Digest: digB}
+	old := ArtifactRef{Project: "backend", Repository: "old", Digest: digB}
+
+	tests := []struct {
+		name            string
+		running         []ArtifactRef
+		labeled         []ArtifactRef
+		listingComplete bool
+		want            plan
+	}{
+		{
+			name:            "a running artifact Harbor has not labeled is attached",
+			running:         []ArtifactRef{api},
+			listingComplete: true,
+			want:            plan{attach: []ArtifactRef{api}},
+		},
+		{
+			name:            "an already labeled artifact is counted, not attached again",
+			running:         []ArtifactRef{api},
+			labeled:         []ArtifactRef{api},
+			listingComplete: true,
+			want:            plan{alreadyLabeled: 1},
+		},
+		{
+			name:            "a labeled artifact that stopped running is detached",
+			running:         []ArtifactRef{api},
+			labeled:         []ArtifactRef{api, old},
+			listingComplete: true,
+			want:            plan{alreadyLabeled: 1, detach: []ArtifactRef{old}},
+		},
+		{
+			name:            "an incomplete listing cannot prove an artifact is labeled, so it is attached anyway",
+			running:         []ArtifactRef{api, worker},
+			labeled:         []ArtifactRef{api},
+			listingComplete: false,
+			want:            plan{attach: []ArtifactRef{api, worker}},
+		},
+		{
+			name:            "an incomplete listing still detaches the stale artifacts it did see",
+			running:         []ArtifactRef{api},
+			labeled:         []ArtifactRef{old},
+			listingComplete: false,
+			want:            plan{attach: []ArtifactRef{api}, detach: []ArtifactRef{old}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.want
+			want.labelName = "running-prod"
+			got := planChanges("running-prod", tt.running, tt.labeled, tt.listingComplete)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("planChanges() = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestPlanChangesPreservesRunningOrderForAttachment(t *testing.T) {
+	first := ArtifactRef{Project: "backend", Repository: "api", Digest: digA}
+	second := ArtifactRef{Project: "backend", Repository: "worker", Digest: digB}
+
+	got := planChanges("running-prod", []ArtifactRef{first, second}, nil, true)
+	if !reflect.DeepEqual(got.attach, []ArtifactRef{first, second}) {
+		t.Errorf("attach = %v, want the running order %v", got.attach, []ArtifactRef{first, second})
+	}
+}
+
 func TestReconcileAbortsOnZeroImages(t *testing.T) {
 	f := &fakeHarbor{labelID: 7}
 	err := Reconcile(context.Background(), f, nil, "prod", false)
@@ -282,6 +352,9 @@ func TestReconcileDryRunReportsChangesWithoutWriting(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "dry-run: would remove running-prod from "+stale.String()) {
 		t.Errorf("logs %q missing planned removal", logs.String())
+	}
+	if !strings.Contains(logs.String(), "dry-run: reconcile complete: would-label=1 already-labeled=1 would-remove=1") {
+		t.Errorf("logs %q missing dry-run summary of the planned changes", logs.String())
 	}
 }
 

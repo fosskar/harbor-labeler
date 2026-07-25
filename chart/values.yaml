@@ -23,8 +23,12 @@ harborLabeler:
     requests:
       cpu: "250m"
       memory: "64Mi"
-  # Define container-level security context here, e.g., runAsNonRoot
+  # Container-level defaults are explicit for admission policies that do not
+  # resolve pod-level inheritance.
   securityContext:
+    runAsUser: 3000
+    runAsGroup: 3000
+    runAsNonRoot: true
     readOnlyRootFilesystem: true
     allowPrivilegeEscalation: false
     privileged: false
@@ -33,13 +37,9 @@ harborLabeler:
         - ALL
     seccompProfile:
       type: RuntimeDefault
-  # Security contexts
-  # Define pod-level security context heree.g., fsGroup, runAsUser
+  # fsGroup controls volume ownership and is only valid at pod level.
   podSecurityContext:
-    runAsUser: 3000
-    runAsGroup: 3000
     fsGroup: 3000
-    runAsNonRoot: true
   schedule: "* * * * *"
   # Preview changes without writing to Harbor.
   dryRun: false

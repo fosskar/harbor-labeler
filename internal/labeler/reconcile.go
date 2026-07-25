@@ -11,9 +11,8 @@ import (
 type HarborAPI interface {
 	FindGlobalLabel(ctx context.Context, name string) (int64, bool, error)
 	EnsureGlobalLabel(ctx context.Context, name string) (int64, error)
-	ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error)
+	ListAllLabeledArtifacts(ctx context.Context, labelID int64) (LabeledArtifacts, error)
 	AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
-	IsProxyCacheProject(project string) bool
 	RemoveLabel(ctx context.Context, ref ArtifactRef, labelID int64) error
 }
 
@@ -65,8 +64,8 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 		errs = append(errs, fmt.Errorf("listing labeled artifacts: %w", err))
 		failedCount++
 	}
-	labeledSet := make(map[ArtifactRef]struct{}, len(labeled))
-	for _, artifact := range labeled {
+	labeledSet := make(map[ArtifactRef]struct{}, len(labeled.Refs))
+	for _, artifact := range labeled.Refs {
 		labeledSet[artifact] = struct{}{}
 	}
 
@@ -81,12 +80,18 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 			continue
 		}
 		if err := harbor.AddLabel(ctx, artifact, labelID); err != nil {
-			if errors.Is(err, ErrArtifactNotFound) && harbor.IsProxyCacheProject(artifact.Project) {
+			if errors.Is(err, ErrArtifactNotFound) && labeled.IsProxyCacheProject(artifact.Project) {
 				log.Printf("skipped missing proxy-cache artifact %s", artifact)
 				skippedMissingProxyCount++
 				continue
 			}
-			log.Printf("warning: labeling %s failed: %v", artifact, err)
+			if errors.Is(err, ErrArtifactNotFound) && !labeled.ProjectsListed() {
+				// decision 12 needs the project list to tell a proxy-cache
+				// miss from a deleted artifact; without it, assume the worse
+				log.Printf("warning: labeling %s failed, and no project list was available to rule out a proxy-cache miss: %v", artifact, err)
+			} else {
+				log.Printf("warning: labeling %s failed: %v", artifact, err)
+			}
 			errs = append(errs, fmt.Errorf("labeling %s: %w", artifact, err))
 			failedCount++
 			continue
@@ -95,7 +100,7 @@ func Reconcile(ctx context.Context, harbor HarborAPI, running []ArtifactRef, clu
 		labeledCount++
 	}
 
-	for _, artifact := range labeled {
+	for _, artifact := range labeled.Refs {
 		if _, isRunning := runningSet[artifact]; isRunning {
 			continue
 		}

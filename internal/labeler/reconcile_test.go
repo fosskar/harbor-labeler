@@ -18,11 +18,15 @@ type fakeHarbor struct {
 	listErr    error         // returned by ListAllLabeledArtifacts alongside labeled
 	labelFound bool
 
-	ensuredName   string
-	added         []ArtifactRef
-	removed       []ArtifactRef
-	failAdd       map[string]error // ArtifactRef.String() -> error
+	ensuredName string
+	added       []ArtifactRef
+	removed     []ArtifactRef
+	failAdd     map[string]error // ArtifactRef.String() -> error
+	// proxyProjects are the projects the sweep classifies as proxy caches.
 	proxyProjects map[string]struct{}
+	// projectListingFailed makes the sweep report no classification at all,
+	// as the real client does when it cannot list Harbor's projects.
+	projectListingFailed bool
 }
 
 func (f *fakeHarbor) FindGlobalLabel(ctx context.Context, name string) (int64, bool, error) {
@@ -34,11 +38,20 @@ func (f *fakeHarbor) EnsureGlobalLabel(ctx context.Context, name string) (int64,
 	return f.labelID, nil
 }
 
-func (f *fakeHarbor) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error) {
+func (f *fakeHarbor) ListAllLabeledArtifacts(ctx context.Context, labelID int64) (LabeledArtifacts, error) {
 	if labelID != f.labelID {
-		return nil, fmt.Errorf("unexpected label id %d", labelID)
+		return LabeledArtifacts{}, fmt.Errorf("unexpected label id %d", labelID)
 	}
-	return f.labeled, f.listErr
+	sweep := LabeledArtifacts{Refs: f.labeled}
+	if !f.projectListingFailed {
+		// a sweep that listed the projects always reports a classification,
+		// even when none of them is a proxy cache
+		sweep.ProxyProjects = f.proxyProjects
+		if sweep.ProxyProjects == nil {
+			sweep.ProxyProjects = map[string]struct{}{}
+		}
+	}
+	return sweep, f.listErr
 }
 
 func (f *fakeHarbor) AddLabel(ctx context.Context, ref ArtifactRef, labelID int64) error {
@@ -47,11 +60,6 @@ func (f *fakeHarbor) AddLabel(ctx context.Context, ref ArtifactRef, labelID int6
 	}
 	f.added = append(f.added, ref)
 	return nil
-}
-
-func (f *fakeHarbor) IsProxyCacheProject(project string) bool {
-	_, ok := f.proxyProjects[project]
-	return ok
 }
 
 func (f *fakeHarbor) RemoveLabel(ctx context.Context, ref ArtifactRef, labelID int64) error {
@@ -215,6 +223,30 @@ func TestReconcileMissingArtifactDependsOnProjectType(t *testing.T) {
 		err := Reconcile(context.Background(), f, []ArtifactRef{ref}, "prod", false)
 		if !errors.Is(err, ErrArtifactNotFound) {
 			t.Fatalf("Reconcile error = %v, want ErrArtifactNotFound", err)
+		}
+	})
+
+	t.Run("without a project list the miss cannot be ruled out and stays an error", func(t *testing.T) {
+		logs := captureLogs(t)
+		f := &fakeHarbor{
+			labelID:              7,
+			proxyProjects:        map[string]struct{}{"docker-hub": {}},
+			projectListingFailed: true,
+			listErr:              errors.New("listing projects: boom"),
+			failAdd: map[string]error{
+				ref.String(): fmt.Errorf("adding label: %w", ErrArtifactNotFound),
+			},
+		}
+
+		err := Reconcile(context.Background(), f, []ArtifactRef{ref}, "prod", false)
+		if !errors.Is(err, ErrArtifactNotFound) {
+			t.Fatalf("Reconcile error = %v, want ErrArtifactNotFound", err)
+		}
+		if strings.Contains(logs.String(), "skipped missing proxy-cache artifact") {
+			t.Errorf("an unclassifiable artifact must not be skipped: %s", logs.String())
+		}
+		if !strings.Contains(logs.String(), "no project list was available to rule out a proxy-cache miss") {
+			t.Errorf("logs must say why the miss could not be ruled out: %s", logs.String())
 		}
 	})
 }

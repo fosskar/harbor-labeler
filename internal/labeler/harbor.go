@@ -35,12 +35,11 @@ func (p harborProject) IsProxyCache() bool {
 // harbor-labeler needs: global labels, project/repository/artifact listing,
 // and artifact label attach/detach.
 type Client struct {
-	baseURL       string // e.g. https://harbor.example.com/api/v2.0
-	username      string
-	password      string
-	http          *http.Client
-	retryDelay    time.Duration
-	proxyProjects map[string]struct{}
+	baseURL    string // e.g. https://harbor.example.com/api/v2.0
+	username   string
+	password   string
+	http       *http.Client
+	retryDelay time.Duration
 }
 
 // ArtifactRef identifies one artifact in Harbor by digest.
@@ -204,23 +203,46 @@ func (c *Client) EnsureGlobalLabel(ctx context.Context, name string) (int64, err
 	return id, nil
 }
 
-// ListAllLabeledArtifacts returns every artifact across all projects that
-// currently carries the given label. A project whose listing fails is
-// skipped; partial results are returned together with the joined errors.
-func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]ArtifactRef, error) {
-	c.proxyProjects = nil
+// LabeledArtifacts is the result of one sweep over Harbor's projects: every
+// artifact carrying the label, and the projects that are proxy caches. Both
+// come from the same project listing, so a sweep that could not list the
+// projects reports neither.
+type LabeledArtifacts struct {
+	Refs          []ArtifactRef
+	ProxyProjects map[string]struct{}
+}
+
+// IsProxyCacheProject reports whether the sweep listed project as a proxy
+// cache. A sweep whose project listing failed knows of no proxy caches and
+// answers false for every project.
+func (l LabeledArtifacts) IsProxyCacheProject(project string) bool {
+	_, ok := l.ProxyProjects[project]
+	return ok
+}
+
+// ProjectsListed reports whether the sweep managed to list Harbor's
+// projects. A sweep that did not cannot classify any project.
+func (l LabeledArtifacts) ProjectsListed() bool {
+	return l.ProxyProjects != nil
+}
+
+// ListAllLabeledArtifacts sweeps every project for artifacts carrying the
+// given label. A project whose listing fails is skipped; partial results are
+// returned together with the joined errors. Failing to list the projects at
+// all yields the zero sweep.
+func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) (LabeledArtifacts, error) {
 	projects, err := c.listProjects(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing projects: %w", err)
+		return LabeledArtifacts{}, fmt.Errorf("listing projects: %w", err)
 	}
-	c.proxyProjects = make(map[string]struct{}, len(projects))
+
+	sweep := LabeledArtifacts{ProxyProjects: make(map[string]struct{})}
 	for _, project := range projects {
 		if project.IsProxyCache() {
-			c.proxyProjects[project.Name] = struct{}{}
+			sweep.ProxyProjects[project.Name] = struct{}{}
 		}
 	}
 
-	var refs []ArtifactRef
 	var errs []error
 	for _, project := range projects {
 		labeled, err := c.listLabeledArtifacts(ctx, project.Name, labelID)
@@ -228,16 +250,9 @@ func (c *Client) ListAllLabeledArtifacts(ctx context.Context, labelID int64) ([]
 			errs = append(errs, fmt.Errorf("listing labeled artifacts in %s: %w", project.Name, err))
 			continue
 		}
-		refs = append(refs, labeled...)
+		sweep.Refs = append(sweep.Refs, labeled...)
 	}
-	return refs, errors.Join(errs...)
-}
-
-// IsProxyCacheProject reports whether the last successful project listing
-// identified project as a proxy cache.
-func (c *Client) IsProxyCacheProject(project string) bool {
-	_, ok := c.proxyProjects[project]
-	return ok
+	return sweep, errors.Join(errs...)
 }
 
 // listProjects returns the names of all projects visible to the account.

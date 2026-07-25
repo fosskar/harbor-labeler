@@ -164,3 +164,25 @@ names the missing project list so the failure is not read as a confirmed
 deletion. Rules out: proxy-cache state held on the client, a separate
 `ListProxyCacheProjects` round-trip, and folding the skip decision into
 `AddLabel`, which would only relocate the hidden ordering.
+
+## 15. Reconcile decides before it writes
+
+`Reconcile` works the running set and Harbor's listing into a `plan` — the
+label to create, the artifacts to attach, the artifacts to detach, and the
+count already correct — and then either applies it or, under `DRY_RUN`,
+reports it. `planChanges` is a pure diff over plain values, so the
+set-difference logic is tested without a fake Harbor; `apply` and `report`
+each consume the same plan.
+
+Previously the diff and the HTTP calls were interleaved in one loop and
+`dryRun` was consulted three times inside it, with `would label` written in
+two places. The diff had no name and no test surface: every assertion about
+it went through `fakeHarbor.added`/`.removed` or through matching log text.
+
+Dry-run now ends with `dry-run: reconcile complete: would-label=N already-labeled=N would-remove=N` instead of the normal run's summary, which
+reported `labeled=0` after announcing the attachments it would make. The
+label lookup keeps its dry-run fork: decision 13 requires that a dry run
+never create the label, and resolving it through `FindGlobalLabel` first in
+every mode would cost a redundant lookup for no gain. Rules out: computing
+the plan after any write has been issued, a second dry-run-only code path
+through the loops, and deriving the summary counters anywhere but the plan.

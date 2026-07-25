@@ -143,3 +143,24 @@ The Harbor client exposes a read-only `FindGlobalLabel` operation so dry-run
 cannot create the label while inspecting it. Rules out: a CLI flag, treating
 label creation as outside dry-run, skipping Harbor reads, and a wrapper that
 suppresses write methods after reconciliation has already selected them.
+
+## 14. Proxy-cache classification travels with the artifact listing
+
+`ListAllLabeledArtifacts` returns a `LabeledArtifacts` sweep carrying both the
+labeled `Refs` and the `ProxyProjects` classification, instead of caching the
+classification on `*Client` for a later `IsProxyCacheProject` call to read.
+The cached form made decision 12 depend on call order that no signature
+expressed: the field was blanked on entry and refilled only after
+`listProjects` succeeded, so a failed project listing silently reclassified
+every proxy-cache 404 in the same run as a deleted artifact, and `fakeHarbor`
+could not reproduce it because it pre-seeded the map.
+
+A sweep that could not list the projects reports `ProjectsListed() == false`
+and classifies nothing. Such a 404 stays fatal: decision 12 rules out
+ignoring every artifact 404, and tolerating an unclassifiable one would apply
+the proxy-cache rule to normal projects during any `/projects` outage,
+swallowing exactly the deletions this tool exists to surface. The warning
+names the missing project list so the failure is not read as a confirmed
+deletion. Rules out: proxy-cache state held on the client, a separate
+`ListProxyCacheProjects` round-trip, and folding the skip decision into
+`AddLabel`, which would only relocate the hidden ordering.

@@ -160,16 +160,16 @@ func TestListAllLabeledArtifactsPaginatesEveryListing(t *testing.T) {
 		}
 	}))
 
-	artifacts, err := c.ListAllLabeledArtifacts(context.Background(), 7)
+	sweep, err := c.ListAllLabeledArtifacts(context.Background(), 7)
 	if err != nil {
 		t.Fatalf("ListAllLabeledArtifacts: %v", err)
 	}
-	if len(artifacts) != pageSize+1 {
-		t.Fatalf("got %d artifacts, want %d", len(artifacts), pageSize+1)
+	if len(sweep.Refs) != pageSize+1 {
+		t.Fatalf("got %d artifacts, want %d", len(sweep.Refs), pageSize+1)
 	}
 	wantLast := ArtifactRef{Project: "team", Repository: "target", Digest: lastDigest}
-	if artifacts[pageSize] != wantLast {
-		t.Errorf("last artifact = %v, want %v", artifacts[pageSize], wantLast)
+	if sweep.Refs[pageSize] != wantLast {
+		t.Errorf("last artifact = %v, want %v", sweep.Refs[pageSize], wantLast)
 	}
 }
 
@@ -196,13 +196,13 @@ func TestListAllLabeledArtifacts(t *testing.T) {
 		}
 	}))
 
-	artifacts, err := c.ListAllLabeledArtifacts(context.Background(), 7)
+	sweep, err := c.ListAllLabeledArtifacts(context.Background(), 7)
 	if err != nil {
 		t.Fatalf("ListAllLabeledArtifacts: %v", err)
 	}
 	want := []ArtifactRef{{Project: "team", Repository: "sub/app", Digest: digest}}
-	if len(artifacts) != 1 || artifacts[0] != want[0] {
-		t.Errorf("got %v, want %v", artifacts, want)
+	if len(sweep.Refs) != 1 || sweep.Refs[0] != want[0] {
+		t.Errorf("got %v, want %v", sweep.Refs, want)
 	}
 }
 
@@ -224,13 +224,38 @@ func TestListAllLabeledArtifactsPartialFailure(t *testing.T) {
 		}
 	}))
 
-	artifacts, err := c.ListAllLabeledArtifacts(context.Background(), 7)
+	sweep, err := c.ListAllLabeledArtifacts(context.Background(), 7)
 	if err == nil {
 		t.Fatal("expected error for the broken project")
 	}
 	want := ArtifactRef{Project: "ok", Repository: "app", Digest: digest}
-	if len(artifacts) != 1 || artifacts[0] != want {
-		t.Errorf("got %v, want partial result %v", artifacts, want)
+	if len(sweep.Refs) != 1 || sweep.Refs[0] != want {
+		t.Errorf("got %v, want partial result %v", sweep.Refs, want)
+	}
+	if !sweep.ProjectsListed() {
+		t.Error("a partial sweep still listed the projects and can classify them")
+	}
+}
+
+func TestListAllLabeledArtifactsWithoutProjectListingCannotClassify(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() == "/api/v2.0/projects" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.EscapedPath())
+		http.NotFound(w, r)
+	}))
+
+	sweep, err := c.ListAllLabeledArtifacts(context.Background(), 7)
+	if err == nil {
+		t.Fatal("expected error when the project listing fails")
+	}
+	if sweep.ProjectsListed() {
+		t.Error("a sweep without a project listing must not claim to classify projects")
+	}
+	if sweep.IsProxyCacheProject("docker-hub") {
+		t.Error("an unclassified sweep must not report any project as a proxy cache")
 	}
 }
 
@@ -250,13 +275,14 @@ func TestListAllLabeledArtifactsRecordsProxyCacheProjects(t *testing.T) {
 		}
 	}))
 
-	if _, err := c.ListAllLabeledArtifacts(context.Background(), 7); err != nil {
+	sweep, err := c.ListAllLabeledArtifacts(context.Background(), 7)
+	if err != nil {
 		t.Fatalf("ListAllLabeledArtifacts: %v", err)
 	}
-	if !c.IsProxyCacheProject("docker-hub") {
+	if !sweep.IsProxyCacheProject("docker-hub") {
 		t.Error("docker-hub not detected as proxy cache")
 	}
-	if c.IsProxyCacheProject("owned") {
+	if sweep.IsProxyCacheProject("owned") {
 		t.Error("owned project incorrectly detected as proxy cache")
 	}
 }

@@ -4,9 +4,42 @@ A Kubernetes CronJob that marks container images in a Harbor registry with a
 `running-<cluster>` label while pods in your cluster reference them, and
 removes the label once no considered pod does.
 
-This makes it visible in Harbor which artifacts Kubernetes pod objects still
-reference — for example as a guard when building
-retention/garbage-collection policies.
+## Why
+
+Harbor knows what it stores. It has no idea what a cluster runs. Nothing in
+Harbor closes that gap on its own: retention rules, immutable tag rules and
+garbage collection select artifacts by repository, tag, count and age, and
+none of them can be told to spare an artifact because a label says it is in
+use.
+
+harbor-labeler writes that missing fact into Harbor. Once every running
+digest carries `running-<cluster>`, the Harbor features that *are*
+label-aware can work with it:
+
+- **Vulnerability reports scoped to what actually runs.** Harbor's CVE
+  export takes a label filter, so a CSV covering only the artifacts your
+  clusters currently run is one request away. A registry-wide report is
+  dominated by artifacts nobody has run in a year; the same report scoped to
+  the running set is a work queue.
+- **Deletion review before deletion.** Retention cannot skip labeled
+  artifacts, but a retention dry run can be checked against them, and a
+  cleanup script can query them and leave them alone.
+- **Replication of the running set.** Replication rules do filter by label,
+  so "mirror what production currently runs to the DR registry" becomes a
+  native Harbor rule.
+- **Inventory across clusters.** Labels are global and each cluster manages
+  only its own, so the artifact list answers "is this digest still running,
+  and where" without querying every cluster.
+
+The deletion case is worth spelling out, because it fails late. Removing an
+image that pods are running breaks nothing at first, since the nodes have it
+cached. It breaks at the next pull — a reschedule onto a cold node, a
+scale-out, a node reboot, a rollback. For the same reason Harbor's "pulled
+within the last # days" retention template is not a proxy for "in use": a
+pod can run for months without a single re-pull.
+
+What the label cannot do is protect anything by itself — see
+[What the label can and cannot do](#what-the-label-can-and-cannot-do).
 
 ## How it works
 
@@ -71,30 +104,85 @@ Use a system-level robot account with:
 - repository: list, artifact: list
 - artifact-label: create/delete on the relevant projects
 
-## Using the label with retention policies
+## What the label can and cannot do
 
-An important limitation first: **Harbor's tag retention rules cannot
-filter by label** (checked against Harbor 2.13 — the rule dialog offers no
-label filter, and the label selector is disabled in Harbor's retention
-code). The `running-<cluster>` label therefore does not automatically
-protect artifacts; it makes in-use artifacts *visible* so you can build
-deletion workflows that respect them:
+Harbor consumes labels in some features and ignores them in others. Checked
+against Harbor 2.13 and against Harbor's current main branch.
 
-- **Dry-run cross-check.** Retention rules combine with OR and support
-  count/age templates plus repository/tag filters. Before enabling a rule,
-  use **Dry Run** and check the candidate deletions against artifacts
-  carrying `running-*` labels in the artifact list.
+| Feature | Filters by label |
+| ------------------------------------- | ---------------- |
+| CVE / scan data export | yes |
+| Artifact list and search (UI and API) | yes |
+| Replication rules | yes |
+| P2P preheat policies | yes |
+| Tag retention rules | no |
+| Immutable tag rules | no |
+| Garbage collection | no |
+| Webhooks, quotas, deployment security | no |
+
+The cleanup mechanisms are exactly the ones that ignore labels. Harbor's
+retention and immutability rules restrict their selector to path patterns
+and reject a label selector outright, and garbage collection takes no
+selector at all. So the rule to keep in mind is: **an artifact carrying
+`running-<cluster>` is deleted by retention and GC like any other.** The
+label makes the running set visible and queryable; it never protects it.
+
+### Vulnerability reports for running images
+
+Harbor's CVE export (2.6 and later) accepts a label filter, which turns the
+running set into a scoped vulnerability report.
+
+In the UI, open a project, choose **Export CVEs**, and pick the
+`running-<cluster>` labels from the label dropdown. Through the API:
+
+```bash
+curl -u "$HARBOR_USERNAME:$HARBOR_PASSWORD" \
+  -X POST "$HARBOR_URL/api/v2.0/export/cve" \
+  -H 'Content-Type: application/json' \
+  -H 'X-Scan-Data-Type: vulnerability' \
+  -d '{"job_name":"running-cves","projects":[1],"labels":[7]}'
+```
+
+Poll `/api/v2.0/export/cve/executions` and download the CSV from the
+finished execution. Worth knowing:
+
+- Selecting several labels matches artifacts carrying **any** of them, so a
+  single export can cover `running-production` and `running-staging`
+  together.
+- One export covers one project, so a label spanning several projects needs
+  one export per project.
+- The filter takes label IDs, not names. Resolve them once through
+  `GET /api/v2.0/labels?scope=g`.
+- Triggering an export requires the Admin, Developer or Maintainer role on
+  the project.
+
+### Retention and cleanup review
+
+Retention rules combine with OR and support count/age templates plus
+repository and tag filters, but no label filter. Use the label around them:
+
+- **Dry-run cross-check.** Before enabling a rule, use **Dry Run** and check
+  the candidate deletions against artifacts carrying `running-*` labels.
 - **Label-aware cleanup scripts.** For automated deletion, query the
   artifact API yourself and skip anything carrying a `running-*` label —
-  labels are first-class in the Harbor API (this tool manages them through
-  the same endpoints), unlike in retention rules.
+  labels are first-class there (`q=labels=(<id>)`), unlike in retention
+  rules.
 - **Generous windows.** If you rely on plain retention rules, size them
-  against your slowest redeploy cycle, and don't use the "pulled within
-  the last # days" templates as a proxy for "running": nodes cache images,
-  so a pod can run for months without a single re-pull.
+  against your slowest redeploy cycle, and don't use the "pulled within the
+  last # days" templates as a proxy for "running".
 
 See the [Harbor tag retention docs](https://goharbor.io/docs/2.13.0/working-with-projects/working-with-images/create-tag-retention-rules/)
 for rule semantics.
+
+### Replicating or preheating the running set
+
+Replication rules and P2P preheat policies both accept label filters, so
+unlike the review workflows above these run unattended:
+
+- A replication rule filtering on `running-production` mirrors the
+  production working set to a DR or air-gapped registry.
+- A preheat policy with the same filter distributes only running artifacts
+  to Dragonfly or Kraken peers.
 
 ## Deploy with Helm
 
@@ -245,9 +333,9 @@ host of `HARBOR_URL`. Compare `kubectl get pod ... -o jsonpath='{.status.contain
 
 **Label attached but artifacts still deleted** — Harbor retention rules
 cannot filter by label, so a retention or GC policy will delete labeled
-artifacts like any others. The label is advisory: it feeds dry-run review
-and label-aware cleanup scripts (see "Using the label with retention
-policies" above).
+artifacts like any others. The label is advisory: it feeds CVE exports,
+dry-run review and label-aware cleanup scripts (see "What the label can and
+cannot do" above).
 
 ## License
 

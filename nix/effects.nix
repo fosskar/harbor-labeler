@@ -1,29 +1,27 @@
 # nixbot effect pipeline; same plumbing as nixfiles modules/flake-parts/effects.nix.
-{ pkgs }:
+{ pkgs, nixbot }:
 let
-  forgeHost = "github.com";
-  repo = "fosskar/harbor-labeler";
-
-  # Shared plumbing for every repo-mutating scheduled effect: request
-  # nixbot's forge token (GitToken), clone with it, then run command. git
-  # redacts credentials from URLs in its output, so the token stays out of
-  # the public effect log.
-  mkRepoEffect =
-    name: command:
-    pkgs.runCommand "effect-${name}"
-      {
-        nativeBuildInputs = [
-          pkgs.cacert
-          pkgs.git
-          pkgs.jq
-          pkgs.nix
-        ];
-        # The GitToken is already a github (app installation) token, so the
-        # nixfiles "github-api" secret is not needed here.
-        secretsMap = builtins.toJSON { git.type = "GitToken"; };
-        HOME = "/build";
-      }
-      ''
+  inherit (nixbot.lib.effects { inherit pkgs; }) mkEffect;
+in
+_args: {
+  onSchedule.update-flake-inputs = {
+    when = {
+      hour = 0;
+      minute = 0;
+    };
+    # nixbot mounts a pushable clone of the effect's commit at
+    # $NIXBOT_EFFECT_CHECKOUT (also the working directory) with an
+    # authenticated `origin`. The GitToken is a github app installation token,
+    # so it serves the direct github API calls too.
+    outputs.effects.update-flake-inputs = mkEffect {
+      name = "effect-update-flake-inputs";
+      checkout = true;
+      inputs = [
+        pkgs.git
+        pkgs.nix
+      ];
+      secretsMap.git.type = "GitToken";
+      effectScript = ''
         set -euo pipefail
         token=$(jq -re '.git.data.token' "$HERCULES_CI_SECRETS_JSON")
         export FORGE_TOKEN="$token"
@@ -33,22 +31,9 @@ let
 
         git config --global user.name 'fosskar[bot]'
         git config --global user.email '300917551+fosskar[bot]@users.noreply.github.com'
-        git config --global safe.directory '*'
 
-        git clone --depth 1 --progress "https://oauth2:$token@${forgeHost}/${repo}.git" repo
-        cd repo
-
-        ${command}
+        nix run "github:fosskar/nixfiles#updater-flake-inputs"
       '';
-in
-_args: {
-  onSchedule.update-flake-inputs = {
-    when = {
-      hour = 0;
-      minute = 0;
     };
-    outputs.effects.update-flake-inputs = mkRepoEffect "update-flake-inputs" ''
-      nix run "github:fosskar/nixfiles#updater-flake-inputs"
-    '';
   };
 }

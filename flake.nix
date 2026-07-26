@@ -5,6 +5,11 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nixbot = {
+      url = "github:Mic92/nixbot";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.treefmt-nix.follows = "treefmt-nix";
+    };
   };
 
   outputs =
@@ -12,6 +17,7 @@
       self,
       nixpkgs,
       treefmt-nix,
+      nixbot,
       ...
     }:
     let
@@ -58,6 +64,9 @@
       });
 
       # nixbot scheduled effects
-      effects = import ./nix/effects.nix { pkgs = nixpkgs.legacyPackages.x86_64-linux; };
+      herculesCI = import ./nix/effects.nix {
+        pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        inherit nixbot;
+      };
     };
 }
